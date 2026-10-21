@@ -32,9 +32,16 @@ function renderChrome(){
     ['tasks','☷','Tasks'],
     ['weekly','▣','Weekly Plan']
   ];
+  const availableProducts=uniq((state.tasks||[]).map(t=>t.product));
+  const productNav=availableProducts.length
+    ? `<div class="side-divider"></div><div class="side-label">Products</div>${availableProducts.map(product=>{
+        const token=encodeURIComponent(product).replace(/'/g,'%27');
+        return `<button class="nav-item nav-product ${state.filters.product===product&&state.view==='tasks'?'active':''}" onclick="filterProduct(decodeURIComponent('${token}'))"><span class="product-nav-dot"></span>${esc(displayProduct(product))}</button>`;
+      }).join('')}`
+    : '';
   document.getElementById('mainNav').innerHTML=nav
     .map(([key,ico,label])=>`<button class="nav-item ${state.view===key?'active':''}" onclick="goView('${key}')"><span class="nav-ico">${ico}</span>${label}</button>`)
-    .join('');
+    .join('')+productNav;
 
   document.getElementById('adminNav').innerHTML=canAdmin()
     ? `<div class="side-label">Admin</div>
