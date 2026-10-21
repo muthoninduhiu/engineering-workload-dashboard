@@ -22,6 +22,14 @@ function setOverviewProduct(product){
 
 }
 
+async function openOwnerWeeklyPlan(ownerToken,productToken){
+  state.weeklyFilters.owner=decodeURIComponent(ownerToken||'');
+  state.weeklyFilters.product=decodeURIComponent(productToken||'');
+  state.weeklyFilters.status='';
+  state.weeklyFilters.showCompleted=false;
+  await openWeeklyPlan();
+}
+
 
 function normalizeOwnerName_(owner) {
   const value = String(owner || '').trim();
@@ -493,14 +501,17 @@ function renderTeamExecution_(data){
 
               const capacity=owner==='Unassigned'?null:ownerCapacity(owner);
 
+              const ownerToken=encodeURIComponent(owner).replace(/'/g,'%27');
+              const productToken=encodeURIComponent(product||'').replace(/'/g,'%27');
+
            
 
               const percent=capacity?utilizationPct(values.hours,capacity.availableHours):null;
               const ownerMissing=activeWeek.filter(w=>normalizeOwnerName_(w.owner)===owner&& weeklyUsesEstimatedHours(w) &&  weeklyHours(w)<=0).length;
 
-              return `<tr>
+              return `<tr class="overview-team-row" role="button" tabindex="0" title="Open ${esc(owner)}'s weekly plan" onclick="openOwnerWeeklyPlan('${ownerToken}','${productToken}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openOwnerWeeklyPlan('${ownerToken}','${productToken}')}">
 
-                <td><b>${esc(owner)}</b></td><td>${values.tasks}</td><td><b>${hoursText(values.hours)}</b></td>
+                <td><b>${esc(owner)}</b><span class="overview-drilldown">View plan →</span></td><td>${values.tasks}</td><td><b>${hoursText(values.hours)}</b></td>
 
                 <td>${capacity?`${hoursText(capacity.availableHours)}${capacity.isOverride?'<span class="badge blue capacity-override-badge">Override</span>':''}`:'—'}</td>
 
