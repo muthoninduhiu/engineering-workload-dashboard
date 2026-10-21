@@ -1,0 +1,568 @@
+<script>
+let __appWorkingTimer=null;
+let __appWorkingStartedAt=0;
+
+function setWorkingStatus(title,message){
+  const wrap=document.getElementById('toastWrap');
+  if(!wrap)return;
+
+  let el=document.getElementById('appWorkingStatus');
+
+  if(!el){
+    el=document.createElement('div');
+    el.id='appWorkingStatus';
+    el.className='toast';
+    el.style.minWidth='290px';
+    el.style.maxWidth='420px';
+    el.style.padding='12px 14px';
+    el.style.display='grid';
+    el.style.gap='4px';
+    el.style.boxShadow='0 12px 30px rgba(16,24,40,.14)';
+    wrap.appendChild(el);
+  }
+
+  el.innerHTML=
+    `<div style="display:flex;align-items:center;gap:8px">
+      <span class="spinner" style="width:14px;height:14px"></span>
+      <b>${esc(title||'Working…')}</b>
+    </div>
+    <div id="appWorkingDetail" style="font-size:10.5px;color:#667085;padding-left:22px">
+      ${esc(message||'Please wait.')}
+    </div>`;
+
+  if(!__appWorkingStartedAt){
+    __appWorkingStartedAt=Date.now();
+  }
+
+  clearInterval(__appWorkingTimer);
+
+  __appWorkingTimer=setInterval(()=>{
+    const detail=document.getElementById('appWorkingDetail');
+    if(!detail)return;
+
+    const seconds=Math.max(
+      1,
+      Math.round((Date.now()-__appWorkingStartedAt)/1000)
+    );
+
+    if(seconds>=4){
+      detail.textContent=
+        `${message||'Still working…'} · ${seconds}s elapsed`;
+    }
+  },1000);
+}
+
+function updateWorkingStatus(title,message){
+  setWorkingStatus(title,message);
+}
+
+function clearWorkingStatus(){
+  clearInterval(__appWorkingTimer);
+  __appWorkingTimer=null;
+  __appWorkingStartedAt=0;
+
+  const el=document.getElementById('appWorkingStatus');
+  if(el)el.remove();
+}
+
+function renderAppLoading(title,message){
+  state.appReady=false;
+  renderChrome();
+
+  document.getElementById('main').innerHTML=
+    `<div class="access-error">
+      <div class="access-error-head">
+        <div class="access-error-icon">
+          <span class="spinner" style="width:18px;height:18px"></span>
+        </div>
+        <div>
+          <div class="access-error-title">${esc(title||'Loading Engineering Workload')}</div>
+          <div class="access-error-sub">${esc(message||'Please wait while the workspace is prepared.')}</div>
+        </div>
+      </div>
+
+      <div class="access-error-body">
+        <div class="access-note" id="authLoadingMessage">
+          Working on it…
+        </div>
+
+        <div style="height:5px;background:#eef2f7;border-radius:99px;overflow:hidden;margin-top:12px">
+          <div style="height:100%;width:42%;background:var(--brand);border-radius:99px;animation:loadingSweep 1.3s ease-in-out infinite alternate"></div>
+        </div>
+
+        <div class="subline" style="margin-top:8px">
+          Please wait while the latest workspace data is prepared.
+        </div>
+      </div>
+    </div>`;
+}
+
+function updateAppLoading(message){
+  const el=document.getElementById('authLoadingMessage');
+  if(el)el.textContent=message;
+}
+
+function stopAppLoading(){
+  // Center loader is replaced by the next render.
+}
+
+async function init(){
+  state.appReady=false;
+  renderChrome();
+
+  renderAppLoading(
+    'Starting Engineering Workload',
+    'Checking your identity and saved session.'
+  );
+
+  try{
+    updateAppLoading('Checking Google identity…');
+    state.publicBootstrap=await rawServer('getPublicBootstrap');
+  }catch(err){
+    stopAppLoading();
+    renderSignInFailure(err);
+    return;
+  }
+
+  const auto=
+    state.publicBootstrap&&
+    state.publicBootstrap.automaticSession;
+
+  if(auto&&auto.sessionToken){
+    saveSession(auto);
+  }
+
+  if(state.sessionToken){
+    try{
+      updateAppLoading('Restoring your saved session…');
+      await loadAuthenticatedApp();
+      return;
+    }catch(err){
+      if(isSessionError(err)){
+        saveSession({
+          sessionToken:'',
+          access:null
+        });
+      }else{
+        showError(err);
+      }
+    }
+  }
+
+  stopAppLoading();
+  renderIdentityScreen();
+}
+
+async function loadAuthenticatedApp(){
+  renderAppLoading(
+    'Loading your workspace',
+    'Checking access and preparing the dashboard.'
+  );
+
+  try{
+    updateAppLoading('Checking your role and product access…');
+
+    const bootstrap=
+      await server('getBootstrapInfo');
+
+    state.bootstrap=bootstrap||{};
+    state.access=
+      bootstrap.access||
+      state.access||
+      {};
+
+    renderChrome();
+
+    if(!state.access.canView){
+      stopAppLoading();
+      clearWorkingStatus();
+      renderAccessRequestScreen();
+      return;
+    }
+
+    updateAppLoading(
+      'Reading product task sheets, weekly plan and capacity…'
+    );
+
+    const data=
+      await server(
+        'getDashboardData',
+        null
+      );
+
+    updateAppLoading('Preparing Overview, Tasks and Weekly Plan…');
+
+    state.tasks=
+      mergePendingCreated(
+        data.tasks||[]
+      );
+
+    state.weeklyPlan=
+      data.weeklyPlan||[];
+
+    state.week=
+      data.week;
+
+    state.todayWeek=
+      data.todayWeek;
+
+    state.routing=
+      data.routing||[];
+
+    state.access=
+      data.access||
+      state.access||
+      {};
+
+    state.validation=
+      data.validation||null;
+
+    state.capacity=
+      data.capacity||
+      {
+        owners:{},
+        defaultHours:40
+      };
+
+    state.appReady=true;
+
+    if(
+      state.access&&
+      ['Editor','Viewer'].includes(state.access.role)
+    ){
+      state.view='tasks';
+    }
+
+    Object.assign(
+      state.weekCache,
+      data.weekWindow||{}
+    );
+
+    Object.assign(
+      state.capacityCache,
+      data.capacityWindow||{}
+    );
+
+    if(state.week&&state.week.start){
+      state.weekCache[state.week.start]=
+        state.weeklyPlan;
+
+      state.capacityCache[state.week.start]=
+        state.capacity;
+    }
+
+    stopAppLoading();
+
+    renderChrome();
+    render();
+
+    showToast(
+      `${state.tasks.length} tasks loaded`
+    );
+
+    prefetchAround(
+      state.week.start
+    );
+  }catch(err){
+    stopAppLoading();
+    throw err;
+  }
+}
+
+function renderIdentityScreen(){
+  state.appReady=false;
+  renderChrome();
+
+  const known=
+    (state.publicBootstrap&&state.publicBootstrap.platformEmail)||
+    localStorage.getItem('ewVerifiedEmail')||
+    '';
+
+  document.getElementById('main').innerHTML=
+    `<div class="access-error">
+      <div class="access-error-head">
+        <div class="access-error-icon">✉</div>
+        <div>
+          <div class="access-error-title">Verify your identity</div>
+          <div class="access-error-sub">One link, no raw Google Sheet access required.</div>
+        </div>
+      </div>
+
+      <div class="access-error-body">
+        <div class="access-note">
+          ${known
+            ?`Google identified <b>${esc(known)}</b>, but the app session needs to be refreshed.`
+            :'Apps Script did not expose your Google email in this deployment. Verify an email address you control once and the app will remember your session.'}
+        </div>
+
+        <div style="max-width:420px;margin-top:16px">
+          <div class="field">
+            <label>Email</label>
+            <input
+              id="authEmail"
+              type="email"
+              value="${esc(known)}"
+              placeholder="you@company.com"
+            >
+          </div>
+
+          <button
+            class="btn primary"
+            id="sendVerificationBtn"
+            style="margin-top:12px"
+            onclick="sendVerificationCode()"
+          >
+            Send verification code
+          </button>
+
+          <div id="authStep" style="margin-top:14px"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function sendVerificationCode(){
+  const email=
+    document
+      .getElementById('authEmail')
+      .value
+      .trim();
+
+  const btn=
+    document.getElementById(
+      'sendVerificationBtn'
+    );
+
+  if(btn){
+    btn.disabled=true;
+    btn.textContent='Sending code…';
+  }
+
+  setWorkingStatus(
+    'Sending verification code',
+    'Contacting the authentication service'
+  );
+
+  try{
+    const r=
+      await rawServer(
+        'startEmailVerification',
+        email
+      );
+
+    clearWorkingStatus();
+
+    window.__verificationId=
+      r.verificationId;
+
+    document.getElementById('authStep').innerHTML=
+      `<div class="access-note" style="margin-bottom:10px">
+        ✓ Code sent to ${esc(r.email)}
+      </div>
+
+      <div class="field">
+        <label>6-digit code</label>
+        <input
+          id="authCode"
+          inputmode="numeric"
+          maxlength="6"
+          placeholder="000000"
+        >
+      </div>
+
+      <button
+        class="btn primary"
+        id="verifyEmailBtn"
+        style="margin-top:10px"
+        onclick="verifyEmailCode()"
+      >
+        Verify & continue
+      </button>`;
+
+    if(btn){
+      btn.textContent='Send again';
+      btn.disabled=false;
+    }
+
+    const code=
+      document.getElementById(
+        'authCode'
+      );
+
+    if(code)code.focus();
+  }catch(err){
+    clearWorkingStatus();
+
+    if(btn){
+      btn.disabled=false;
+      btn.textContent='Send verification code';
+    }
+
+    showError(err);
+  }
+}
+
+async function verifyEmailCode(){
+  const btn=
+    document.getElementById(
+      'verifyEmailBtn'
+    );
+
+  if(btn){
+    btn.disabled=true;
+    btn.textContent='Verifying…';
+  }
+
+  setWorkingStatus(
+    'Verifying identity',
+    'Checking the code you entered'
+  );
+
+  try{
+    const r=
+      await rawServer(
+        'completeEmailVerification',
+        window.__verificationId,
+        document
+          .getElementById('authCode')
+          .value
+          .trim()
+      );
+
+    saveSession(r);
+
+    clearWorkingStatus();
+
+    renderAppLoading(
+      'Identity verified',
+      'Loading your Engineering Workload workspace.'
+    );
+
+    await loadAuthenticatedApp();
+  }catch(err){
+    clearWorkingStatus();
+
+    if(btn){
+      btn.disabled=false;
+      btn.textContent='Verify & continue';
+    }
+
+    showError(err);
+  }
+}
+
+function renderAccessRequestScreen(){
+  state.appReady=false;
+  renderChrome();
+
+  const a=state.access||{};
+
+  document.getElementById('main').innerHTML=
+    `<div class="access-error">
+      <div class="access-error-head">
+        <div class="access-error-icon">🔒</div>
+        <div>
+          <div class="access-error-title">Access approval required</div>
+          <div class="access-error-sub">
+            Your identity is verified. An admin only needs to approve your app role and products — no spreadsheet sharing.
+          </div>
+        </div>
+      </div>
+
+      <div class="access-error-body">
+        <dl class="access-facts">
+          <dt>Verified email</dt>
+          <dd>${esc(a.email||'')}</dd>
+          <dt>Current access</dt>
+          <dd>Not approved</dd>
+        </dl>
+
+        <div class="field" style="max-width:520px;margin-top:14px">
+          <label>Optional note</label>
+          <textarea
+            id="accessNote"
+            placeholder="Which product(s) do you need access to?"
+          ></textarea>
+        </div>
+
+        <div class="access-actions">
+          <button class="btn primary" onclick="requestMyAccess()">Request access</button>
+          <button class="btn" onclick="signOutApp()">Use another email</button>
+        </div>
+
+        <div id="accessRequestMsg"></div>
+      </div>
+    </div>`;
+}
+
+async function requestMyAccess(){
+  try{
+    setWorkingStatus(
+      'Sending access request',
+      'Submitting your request to the admin queue'
+    );
+
+    await server(
+      'requestAccess',
+      (document.getElementById('accessNote')||{}).value||''
+    );
+
+    clearWorkingStatus();
+
+    document.getElementById('accessRequestMsg').innerHTML=
+      '<div class="access-note" style="margin-top:12px">✓ Access request sent. An admin can approve you from Users.</div>';
+
+    showToast('Access request sent');
+  }catch(err){
+    clearWorkingStatus();
+    showError(err);
+  }
+}
+
+async function signOutApp(){
+  try{
+    setWorkingStatus(
+      'Signing out',
+      'Closing your app session'
+    );
+
+    if(state.sessionToken){
+      await rawServer(
+        'logoutAppSession',
+        state.sessionToken
+      );
+    }
+  }catch(e){}
+
+  clearWorkingStatus();
+
+  saveSession({
+    sessionToken:'',
+    access:null
+  });
+
+  state.appReady=false;
+  state.tasks=[];
+  state.weeklyPlan=[];
+  state.activity=[];
+
+  renderChrome();
+  renderIdentityScreen();
+}
+
+function renderSignInFailure(err){
+  clearWorkingStatus();
+  stopAppLoading();
+
+  document.getElementById('main').innerHTML=
+    `<div class="access-error">
+      <div class="access-error-head">
+        <div class="access-error-icon">!</div>
+        <div>
+          <div class="access-error-title">Could not start the app</div>
+          <div class="access-error-sub">${esc((err&&err.message)||String(err))}</div>
+        </div>
+      </div>
+    </div>`;
+}
+</script>

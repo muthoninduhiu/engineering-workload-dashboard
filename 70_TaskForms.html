@@ -1,0 +1,291 @@
+<script>
+function openNewTask(defaultStatus,addToWeek){
+  if(!canEdit())return;
+
+  const products=state.routing.map(r=>r.product);
+  const currentProduct=
+    state.filters.product&&products.includes(state.filters.product)
+      ?state.filters.product
+      :products[0];
+
+  const initialStatus=defaultStatus||'Backlog';
+  const canPlanInitial=groupStatus({status:initialStatus})!=='Done';
+
+  state.selectedTask=null;
+  state.selectedTaskOriginal=null;
+  window.__drawerContext={type:'new-task'};
+
+  document.getElementById('taskDrawer').innerHTML=
+    `<div class="drawer-head">
+       <div>
+         <div class="drawer-id">CREATE</div>
+         <div class="drawer-title">New task</div>
+       </div>
+       <button class="drawer-close" onclick="closeTaskDrawer()">×</button>
+     </div>
+
+     <div class="drawer-body">
+       <div class="drawer-intro">
+         Create the task in its actual product backlog. The target route is shown before saving.
+       </div>
+
+       <div class="form-grid">
+         <div class="field full">
+           <label>Task name *</label>
+           <input id="n_title" placeholder="What needs to be done?">
+         </div>
+
+         <div class="field">
+           <label>Product *</label>
+           <select id="n_product" onchange="refreshNewTaskRoute()">
+             ${products.map(p=>`<option value="${esc(p)}" ${p===currentProduct?'selected':''}>${esc(displayProduct(p))}</option>`).join('')}
+           </select>
+         </div>
+
+         <div class="field">
+           <label>Target sheet *</label>
+           <select id="n_sheet" onchange="refreshNewTaskRoutePreview()"></select>
+         </div>
+
+         <div class="field">
+           <label>Owner</label>
+           <input id="n_owner" list="ownerList" placeholder="Owner">
+           <datalist id="ownerList">
+             ${uniq(state.tasks.map(t=>t.owner)).map(o=>`<option value="${esc(o)}">`).join('')}
+           </datalist>
+         </div>
+
+         <div class="field">
+           <label>Status</label>
+           <select id="n_status" onchange="syncNewTaskWeekEligibility()">
+             ${COMMON_STATUSES.map(s=>`<option ${s===initialStatus?'selected':''}>${s}</option>`).join('')}
+           </select>
+         </div>
+
+         <div class="field">
+           <label>Priority</label>
+           <select id="n_priority">
+             ${PRIORITIES.map(p=>`<option ${p==='P2'?'selected':''}>${p}</option>`).join('')}
+           </select>
+         </div>
+
+         <div class="field">
+           <label>Due date</label>
+           <input id="n_due" type="date">
+         </div>
+
+         <div class="field full">
+           <label>Blocker / dependency</label>
+           <textarea id="n_dependency" placeholder="Optional"></textarea>
+         </div>
+       </div>
+
+       <div class="drawer-section">
+         <div class="drawer-section-title">Source route</div>
+         <div class="route-preview" id="routePreview"></div>
+       </div>
+
+       <div class="drawer-section">
+         <div class="drawer-section-title">Weekly planning</div>
+
+         <div class="week-plan-toggle">
+           <label class="check-row">
+             <input
+               id="n_addWeek"
+               type="checkbox"
+               ${addToWeek&&canPlanInitial?'checked':''}
+               ${canPlanInitial?'':'disabled'}
+               onchange="syncNewTaskWeekEligibility()"
+             >
+             Add to ${esc(fmtWeek(state.week))}
+           </label>
+           <div class="subline" id="n_weekHelp"></div>
+         </div>
+
+         <div class="form-grid new-task-week-fields">
+           <div class="field">
+             <label>Weekly commitment</label>
+             <select id="n_commitment" ${addToWeek&&canPlanInitial?'':'disabled'}>
+               ${COMMITMENTS.map(c=>`<option>${esc(c)}</option>`).join('')}
+             </select>
+           </div>
+
+           <div class="field">
+             <label>Estimated hours *</label>
+             <input
+               id="n_estimatedHours"
+               type="number"
+               min="0.25"
+               max="168"
+               step="0.25"
+               placeholder="Enter team estimate"
+               ${addToWeek&&canPlanInitial?'':'disabled'}
+             >
+           </div>
+         </div>
+       </div>
+     </div>
+
+     <div class="drawer-foot">
+       <button class="btn" onclick="closeTaskDrawer()">Cancel</button>
+       <button class="btn primary" id="createTaskBtn" onclick="createTask()">Create task</button>
+     </div>`;
+
+  document.getElementById('drawerBackdrop').classList.add('open');
+  document.getElementById('taskDrawer').classList.add('open');
+
+  refreshNewTaskRoute();
+  syncNewTaskWeekEligibility();
+
+  setTimeout(()=>{
+    const title=document.getElementById('n_title');
+    if(title)title.focus();
+  },0);
+}
+
+
+function syncNewTaskWeekEligibility(){
+  const status=document.getElementById('n_status');
+  const add=document.getElementById('n_addWeek');
+  const commitment=document.getElementById('n_commitment');
+  const hours=document.getElementById('n_estimatedHours');
+  const help=document.getElementById('n_weekHelp');
+
+  if(!status||!add||!commitment)return;
+
+  const group=groupStatus({status:status.value});
+  const done=group==='Done';
+  const qa=group==='QA';
+
+  if(done){
+    add.checked=false;
+    add.disabled=true;
+    commitment.disabled=true;
+
+    if(hours){
+      hours.value='';
+      hours.disabled=true;
+      hours.placeholder='Not used for Done';
+    }
+
+    if(help){
+      help.textContent='Done tasks are not added to a weekly plan.';
+    }
+    return;
+  }
+
+  add.disabled=false;
+  commitment.disabled=!add.checked;
+
+  if(hours){
+    if(qa){
+      hours.value='';
+      hours.disabled=true;
+      hours.placeholder='Not used for QA / Review';
+    }else{
+      hours.disabled=!add.checked;
+      hours.placeholder='Enter team estimate';
+    }
+  }
+
+  if(help){
+    if(!add.checked){
+      help.textContent='';
+    }else if(qa){
+      help.textContent='QA / Review can be planned without estimated hours.';
+    }else{
+      help.textContent='Enter the team estimate before adding this task to the week.';
+    }
+  }
+}
+
+
+function refreshNewTaskRoute(){const product=document.getElementById('n_product').value,entry=state.routing.find(r=>r.product===product),sheet=document.getElementById('n_sheet');sheet.innerHTML=(entry?entry.workstreams:[]).map(r=>`<option value="${esc(r.sourceSheet)}" data-workstream="${esc(r.label)}">${esc(r.sourceSheet)}${entry.workstreams.length>1?` · ${esc(r.label)}`:''}</option>`).join('');refreshNewTaskRoutePreview()}
+function refreshNewTaskRoutePreview(){const product=document.getElementById('n_product').value,sheet=document.getElementById('n_sheet'),opt=sheet.options[sheet.selectedIndex],work=opt?opt.dataset.workstream:'';document.getElementById('routePreview').innerHTML=`<b>Route:</b> ${esc(displayProduct(product))} → ${esc(sheet.value||'—')}<br><span style="color:#667085">Workstream: ${esc(work||'—')} · Task ID will be generated automatically.</span>`}
+async function createTask(){const sheet=document.getElementById('n_sheet'),opt=sheet.options[sheet.selectedIndex],payload={title:document.getElementById('n_title').value.trim(),product:document.getElementById('n_product').value,sourceSheet:sheet.value,workstream:opt?opt.dataset.workstream:'',owner:document.getElementById('n_owner').value.trim(),status:document.getElementById('n_status').value,priority:document.getElementById('n_priority').value,dueDate:document.getElementById('n_due').value,points:'',dependency:document.getElementById('n_dependency').value.trim(),addToWeek:document.getElementById('n_addWeek').checked,commitmentLevel:document.getElementById('n_commitment').value,estimatedHours:(document.getElementById('n_estimatedHours')||{}).value||'',weekStart:state.week.start};if(!payload.title){showToast('Task name is required','error');return}if(!payload.product||!payload.sourceSheet){showToast('Product and target sheet are required','error');return}if(payload.dueDate&&!/^\d{4}-\d{2}-\d{2}$/.test(payload.dueDate)){showToast('Due date is invalid','error');return}if(payload.addToWeek&&groupStatus({status:payload.status})==='Done'){showToast('Done tasks cannot be added to the weekly plan.','error');return}if(payload.addToWeek&&taskUsesEstimatedHours({status:payload.status})&&(!Number.isFinite(Number(payload.estimatedHours))||Number(payload.estimatedHours)<=0)){showToast('Enter the team estimate in hours before adding this task to the weekly plan.','error');return}if(payload.addToWeek&&!taskUsesEstimatedHours({status:payload.status}))payload.estimatedHours='';const btn=document.getElementById('createTaskBtn');btn.disabled=true;btn.textContent='Creating…';try{const r=await server('createMasterTask',payload);const created=optimisticCreatedTask(r,payload);const key=String(r.taskId).toLowerCase();if(created.pendingSync||!Number(created.rowIndex))state.pendingCreated[key]=created;const existing=state.tasks.findIndex(x=>String(x.taskId||'').toLowerCase()===key);if(existing>=0)state.tasks[existing]=created;else state.tasks.unshift(created);closeTaskDrawer();if(r.addedToWeek){invalidateWeek(state.week.start);await loadWeek(state.week.start,true)}renderChrome();render();showToast(`${r.taskId} created${r.addedToWeek?' and added to the week':''}`);reconcileCreatedTask(r.taskId);}catch(err){showError(err);btn.disabled=false;btn.textContent='Create task'}}
+async function reloadAll(){
+  setWorkingStatus(
+    'Refreshing workspace',
+    'Reading source sheets, weekly plan and capacity'
+  );
+
+  try{
+    const data=
+      await server(
+        'getDashboardData',
+        state.week
+          ?state.week.start
+          :null
+      );
+
+    updateWorkingStatus(
+      'Refreshing workspace',
+      'Updating the dashboard with the latest data'
+    );
+
+    state.tasks=
+      mergePendingCreated(
+        data.tasks||[]
+      );
+
+    state.week=data.week;
+    state.todayWeek=data.todayWeek;
+    state.weeklyPlan=data.weeklyPlan||[];
+    state.routing=data.routing||state.routing;
+    state.access=data.access||state.access;
+    state.validation=data.validation||state.validation;
+    state.capacity=
+      data.capacity||
+      {
+        owners:{},
+        defaultHours:40
+      };
+
+    state.weekCache={
+      ...(data.weekWindow||{})
+    };
+
+    state.capacityCache={
+      ...(data.capacityWindow||{})
+    };
+
+    state.weekCache[state.week.start]=
+      state.weeklyPlan;
+
+    state.capacityCache[state.week.start]=
+      state.capacity;
+
+    state.appReady=true;
+
+    clearWorkingStatus();
+
+    renderChrome();
+    render();
+
+    showToast(
+      `${state.tasks.length} tasks refreshed`
+    );
+
+    prefetchAround(
+      state.week.start
+    );
+  }catch(err){
+    clearWorkingStatus();
+
+    if(isSessionError(err)){
+      saveSession({
+        sessionToken:'',
+        access:null
+      });
+
+      renderIdentityScreen();
+    }else{
+      showError(err);
+    }
+  }
+}
+
+function closeModal(id){document.getElementById(id).classList.remove('open')}
+function showConfirm(title,message,onYes){window.__confirmAction=onYes;document.getElementById('confirmModalCard').innerHTML=`<div class="modal-head"><h3>${esc(title)}</h3></div><div class="modal-body"><p style="margin:0;color:#667085;font-size:13px;line-height:1.55">${esc(message)}</p></div><div class="modal-foot"><button class="btn" onclick="closeModal('confirmModal')">Cancel</button><button class="btn danger" onclick="runConfirmAction()">Confirm</button></div>`;document.getElementById('confirmModal').classList.add('open')}
+async function runConfirmAction(){const fn=window.__confirmAction;window.__confirmAction=null;closeModal('confirmModal');if(fn)await fn()}
+</script>

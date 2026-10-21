@@ -1,0 +1,445 @@
+<script>
+
+function weeklyOwnerKey(owner) {
+  const value = String(owner || '').trim();
+  const key = value.toLowerCase();
+
+  if (
+    key === 'pt' ||
+    key === 'pthapli@nostacklabs.com' ||
+    key === 'pratyush thapliyal'
+  ) {
+    return 'PT';
+  }
+
+  if (
+    key === 'ambrose' ||
+    key === 'ambrose.ahawo@mediapal.net'
+  ) {
+    return 'Ambrose';
+  }
+
+  if (
+    key === 'rohit' ||
+    key === 'rohit tatu' ||
+    key === 'rtatu@nostacklabs.com' ||
+    key === 'rtatu@weplayarcade.com'
+  ) {
+    return 'Rohit';
+  }
+
+  if (
+    key === 'james' ||
+    key === 'james.odera@mediapal.net'
+  ) {
+    return 'James';
+  }
+
+  if (
+    key === 'antony' ||
+    key === 'anthony' ||
+    key === 'tulla' ||
+    key === 'tula' ||
+    key === 'antony tulla' ||
+    key === 'anthony tulla' ||
+    key === 'anthony.tulla@mediapal.net'
+  ) {
+    return 'Antony';
+  }
+
+  if (
+    key === 'abhishek' ||
+    key === 'abhishek.verma@mediapal.net'
+  ) {
+    return 'Abhishek';
+  }
+
+  if (
+    key === 'maryanne' ||
+    key === 'maryanne.nduhiu@mediapal.net'
+  ) {
+    return 'Maryanne';
+  }
+
+  if (
+    key === 'yash' ||
+    key === 'yash@weplayarcade.com'
+  ) {
+    return 'Yash';
+  }
+
+  return value || 'Unassigned';
+}
+
+function setWeeklyProductFilter(product){
+  state.weeklyFilters.product=product||'';
+  state.overviewProduct=state.weeklyFilters.product;
+  state.filters.product=state.weeklyFilters.product;
+  renderWeekly();
+}
+
+function renderWeekly(){
+  const all=state.weeklyPlan||[];
+  const owners=uniq(all.map(w=>weeklyOwnerKey(w.owner)));
+  const products=uniq(all.map(w=>w.product));
+
+  const scoped=all.filter(w=>
+    (!state.weeklyFilters.product||w.product===state.weeklyFilters.product)&&
+    (!state.weeklyFilters.owner|| weeklyOwnerKey(w.owner)===state.weeklyFilters.owner)
+  );
+
+  const completed=scoped.filter(weeklyIsDone);
+  const active=scoped.filter(w=>!weeklyIsDone(w));
+
+  let visible=state.weeklyFilters.showCompleted?scoped:active;
+
+  if(state.weeklyFilters.status){
+    visible=visible.filter(w=>{
+      const live=(state.tasks||[]).find(t=>String(t.taskId).toLowerCase()===String(w.taskId).toLowerCase());
+      const g=weeklyIsDone(w)?'Done':groupStatus(live||{status:w.weeklyStatus});
+      return g===state.weeklyFilters.status;
+    });
+  }
+
+  const cap=weeklyCapacitySummary(active);
+  const remaining=cap.remainingHours;
+  const remainingNote=remaining<0?`${hoursText(Math.abs(remaining))} over capacity`:`${hoursText(remaining)} remaining`;
+
+  document.getElementById('main').innerHTML=
+    pageHead(
+      'Weekly Plan',
+      'Plan against real weekly availability. Default capacity is 40 hours per owner.',
+      weekNavHtml()
+    )+
+    `<div class="week-summary-strip capacity-strip">
+      <div class="week-stat"><b>${active.length}</b><span>Active tasks</span></div>
+      <div class="week-stat"><b>${hoursText(cap.plannedHours)}</b><span>Planned hours</span></div>
+      <div class="week-stat"><b>${hoursText(cap.availableHours)}</b><span>Available capacity</span></div>
+      <div class="week-stat ${remaining<0?'over':''}"><b>${hoursText(remaining)}</b><span>${remaining<0?'Over capacity':'Remaining'}</span></div>
+      <div class="week-stat"><b>${cap.owners.length}</b><span>Owners${cap.missingEstimates?` · ${cap.missingEstimates} unestimated`:''}</span></div>
+    </div>
+    <div class="weekly-toolbar">
+      <select class="control" onchange="setWeeklyProductFilter(this.value)">
+        <option value="">All products</option>
+        ${products.map(p=>`<option value="${esc(p)}" ${state.weeklyFilters.product===p?'selected':''}>${esc(displayProduct(p))}</option>`).join('')}
+      </select>
+      <select class="control" onchange="state.weeklyFilters.owner=this.value;renderWeekly()">
+        <option value="">All owners</option>
+        ${owners.map(o=>`<option value="${esc(o)}" ${state.weeklyFilters.owner===o?'selected':''}>${esc(o)}</option>`).join('')}
+      </select>
+      <select class="control" onchange="state.weeklyFilters.status=this.value;if(this.value==='Done')state.weeklyFilters.showCompleted=true;renderWeekly()">
+        <option value="">All statuses</option>
+        ${['Backlog','Todo','In Progress','QA','Blocked','Done'].map(s=>`<option value="${s}" ${state.weeklyFilters.status===s?'selected':''}>${s==='QA'?'QA / Review':s}</option>`).join('')}
+      </select>
+      <button class="btn sm ${state.weeklyFilters.showCompleted?'':'ghost'}" onclick="state.weeklyFilters.showCompleted=!state.weeklyFilters.showCompleted;renderWeekly()">
+        ${state.weeklyFilters.showCompleted?'Hide completed':`Show completed (${completed.length})`}
+      </button>
+     
+    </div>
+    ${cap.missingEstimates?`<div class="capacity-warning">${cap.missingEstimates} active weekly task${cap.missingEstimates===1?' has':'s have'} no estimated hours yet, so utilization is understated.</div>`:''}
+    ${renderWeeklyTable(visible)}`;
+}
+
+function weeklySortRows(rows){
+  const rank={P0:0,P1:1,P2:2,P3:3};
+  return rows.slice().sort((a,b)=>{
+   const owner = weeklyOwnerKey(a.owner).localeCompare(weeklyOwnerKey(b.owner));
+    if(owner)return owner;
+    const pa=rank[a.registerPriority||a.priority]??9;
+    const pb=rank[b.registerPriority||b.priority]??9;
+    if(pa!==pb)return pa-pb;
+    return String(a.title||'').localeCompare(String(b.title||''));
+  });
+}
+
+function toggleWeeklyOwner(owner){
+  const key=String(owner||'Unassigned');
+  state.weeklyCollapsedOwners[key]=!state.weeklyCollapsedOwners[key];
+  renderWeekly();
+}
+
+function collapseAllWeeklyOwners(collapse){
+  const owners=uniq(
+  (state.weeklyPlan||[]).map(w=>weeklyOwnerKey(w.owner))
+);
+  owners.forEach(owner=>state.weeklyCollapsedOwners[owner]=!!collapse);
+  renderWeekly();
+}
+
+function renderWeeklyTable(plan){
+  if(!plan.length){
+    return `<div class="panel"><div class="empty">${
+      state.weeklyFilters.showCompleted
+        ?'No matching weekly tasks.'
+        :'No active tasks planned for this week.'
+    }</div></div>`;
+  }
+
+  const byOwner={};
+  weeklySortRows(plan).forEach(w=>{
+    const owner=weeklyOwnerKey(w.owner);
+    (byOwner[owner]||(byOwner[owner]=[])).push(w);
+  });
+
+  const owners=Object.keys(byOwner).sort((a,b)=>a.localeCompare(b));
+
+  return `<div class="weekly-collapse-actions">
+      <button class="btn sm ghost" onclick="collapseAllWeeklyOwners(false)">Expand all</button>
+      <button class="btn sm ghost" onclick="collapseAllWeeklyOwners(true)">Collapse all</button>
+    </div>
+    <div class="weekly-table-wrap">
+      <table class="weekly-plan-table">
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Product</th>
+            <th>Commitment</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Estimated hours</th>
+            <th>Due</th>
+            <th>Planning note</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${owners.map(owner=>{
+            const rows=byOwner[owner];
+            const collapsed=!!state.weeklyCollapsedOwners[owner];
+            const activeRows=rows.filter(w=>!weeklyIsDone(w));
+            const plannedHours=activeRows.reduce((sum,w)=>sum+weeklyHours(w),0);
+            const cap=ownerCapacity(owner);
+            const available=Number(cap.availableHours||0);
+            const remaining=available-plannedHours;
+            const util=utilizationPct(plannedHours,available);
+            const missing=activeRows.filter(w=>weeklyUsesEstimatedHours(w)&&weeklyHours(w)<=0).length;
+            const doneCount=rows.filter(weeklyIsDone).length;
+
+            return `
+              <tr class="weekly-owner-group ${util>100?'owner-over':''}" onclick="toggleWeeklyOwner('${esc(owner)}')">
+                <td colspan="9">
+                  <div class="weekly-owner-group-inner">
+                    <span class="weekly-chevron">${collapsed?'▸':'▾'}</span>
+                    <span class="avatar">${initials(owner)}</span>
+                    <b>${esc(owner)}</b>
+                    <span class="owner-capacity ${util>100?'over':''}">
+                      ${hoursText(plannedHours)} / ${hoursText(available)} · ${util}%
+                    </span>
+                    <span class="subline">
+                      ${activeRows.length} active${doneCount?` · ${doneCount} completed`:''}${missing?` · ${missing} unestimated`:''}
+                    </span>
+                    ${cap.isOverride?'<span class="badge blue">Capacity override</span>':''}
+                    ${canAdmin()&&owner!=='Unassigned'?`<button class="btn sm ghost owner-capacity-edit" onclick="event.stopPropagation();openCapacityEditor('${esc(owner)}')">Edit capacity</button>`:''}
+                  </div>
+                </td>
+              </tr>
+              ${collapsed?'':rows.map(w=>{
+                const done=weeklyIsDone(w);
+                const live=(state.tasks||[]).find(t=>String(t.taskId).toLowerCase()===String(w.taskId).toLowerCase())||{};
+                const priority=live.normalizedPriority||w.priority||'P2';
+                const shownStatus=done?'Done':(live.status||w.weeklyStatus||'Todo');
+                const usesHours=weeklyUsesEstimatedHours(w);
+                const hours=weeklyHours(w);
+
+                return `<tr class="${done?'weekly-row-done':''}">
+                  <td>
+                    <button class="task-link" onclick="event.stopPropagation();openTask('${esc(w.taskId)}')">${esc(w.taskId)} · ${esc(w.title)}</button>
+                    <div class="subline">${esc(w.workstream||w.sourceSheet||'')}</div>
+                  </td>
+                  <td>${productBadge(w.product)}</td>
+                  <td>
+                    ${canEdit()&&!done
+                      ?`<select class="inline-select weekly-select" onchange="updateWeeklyInline(${w.weeklyRow},'commitmentLevel',this.value)">
+                          ${COMMITMENTS.map(c=>`<option ${w.commitmentLevel===c?'selected':''}>${esc(c)}</option>`).join('')}
+                        </select>`
+                      :commitmentBadge(w.commitmentLevel)}
+                  </td>
+                  <td>
+                    ${canEdit()&&!done
+                      ?`<select class="inline-select weekly-select" onchange="updateWeeklyInline(${w.weeklyRow},'weeklyStatus',this.value)">
+                          ${statusOptions(w.weeklyStatus)}
+                        </select>`
+                      :statusBadge(shownStatus)}
+                  </td>
+                  <td>${priorityBadge(priority)}</td>
+                  <td>
+                    ${usesHours
+                      ?(
+                        canEdit()&&!done
+                          ?`<input class="weekly-hours ${hours<=0?'missing':''}" type="number" min="0.25" max="168" step="0.25" value="${hours||''}" placeholder="Hours" title="Estimated hours" onblur="updateWeeklyHours(${w.weeklyRow},this)">`
+                          :(hours>0?hoursText(hours):'—')
+                       )
+                      :'<span class="subline">—</span>'}
+                  </td>
+                  <td>${fmtDate(w.dueDate)}</td>
+                  <td>
+                    ${canEdit()&&!done
+                      ?`<input class="weekly-note weekly-note-table" value="${esc(w.planningNote||'')}" placeholder="Add note…" onblur="updateWeeklyNote(${w.weeklyRow},this)">`
+                      :`<span class="weekly-note-read">${esc(w.planningNote||'—')}</span>`}
+                  </td>
+                  <td class="weekly-actions-cell">
+                    <button class="btn sm ghost" onclick="openWeeklyActions(${w.weeklyRow},'${esc(w.taskId)}')">•••</button>
+                  </td>
+                </tr>`;
+              }).join('')}
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function openCapacityEditor(owner){
+  const cap=ownerCapacity(owner);
+  document.getElementById('taskModalCard').innerHTML=
+    `<div class="modal-head"><h3>${esc(owner)} · weekly capacity</h3></div>
+     <div class="modal-body">
+       <div class="form-grid">
+         <div class="field">
+           <label>Available hours</label>
+           <input id="capacity_hours" type="number" min="0" max="168" step="0.25" value="${esc(cap.availableHours)}">
+         </div>
+         <div class="field full">
+           <label>Note</label>
+           <textarea id="capacity_note" placeholder="Leave, training, public holiday, reduced availability…">${esc(cap.note||'')}</textarea>
+         </div>
+       </div>
+       <div class="capacity-hint">Default is 40h. Overrides apply only to ${esc(fmtWeek(state.week))}.</div>
+     </div>
+     <div class="modal-foot">
+       ${cap.isOverride?`<button class="btn danger" style="margin-right:auto" onclick="resetCapacityOverride('${esc(owner)}')">Reset to 40h</button>`:''}
+       <button class="btn" onclick="closeModal('taskModal')">Cancel</button>
+       <button class="btn primary" onclick="saveCapacityOverride('${esc(owner)}')">Save capacity</button>
+     </div>`;
+  document.getElementById('taskModal').classList.add('open');
+}
+
+async function saveCapacityOverride(owner){
+  const hours=Number((document.getElementById('capacity_hours')||{}).value);
+  const note=(document.getElementById('capacity_note')||{}).value||'';
+  if(!Number.isFinite(hours)||hours<0||hours>168){
+    showToast('Capacity must be between 0 and 168 hours.','error');
+    return;
+  }
+  try{
+    await server('setOwnerCapacity',owner,hours,state.week.start,note);
+    closeModal('taskModal');
+    delete state.capacityCache[state.week.start];
+    await loadWeek(state.week.start,true);
+    showToast(`${owner} capacity updated to ${hoursText(hours)}`);
+  }catch(err){showError(err)}
+}
+
+async function resetCapacityOverride(owner){
+  try{
+    await server('resetOwnerCapacity',owner,state.week.start);
+    closeModal('taskModal');
+    delete state.capacityCache[state.week.start];
+    await loadWeek(state.week.start,true);
+    showToast(`${owner} capacity reset to 40h`);
+  }catch(err){showError(err)}
+}
+
+function openWeeklyActions(row,taskId){
+  const item=(state.weeklyPlan||[]).find(w=>Number(w.weeklyRow)===Number(row));
+  if(!item)return;
+
+  document.getElementById('confirmModalCard').innerHTML=
+    `<div class="modal-head"><h3>${esc(taskId)}</h3></div>
+     <div class="modal-body">
+       <div class="weekly-action-list">
+         <button class="weekly-action" onclick="closeModal('confirmModal');openTask('${esc(taskId)}')">
+           <b>View task</b><span>Open task details</span>
+         </button>
+         ${canEdit()?`<button class="weekly-action danger-link" onclick="closeModal('confirmModal');confirmRemoveWeek(${row},'${esc(taskId)}')">
+           <b>Remove from this week</b><span>Keep the source task</span>
+         </button>`:''}
+         ${canAdmin()?`<button class="weekly-action danger-link" onclick="closeModal('confirmModal');confirmDeleteTask('${esc(taskId)}')">
+           <b>Delete task permanently</b><span>Remove source task and every weekly entry</span>
+         </button>`:''}
+       </div>
+     </div>
+     <div class="modal-foot"><button class="btn" onclick="closeModal('confirmModal')">Close</button></div>`;
+
+  document.getElementById('confirmModal').classList.add('open');
+}
+
+function confirmRemoveWeek(row,taskId){
+  showConfirm(
+    'Remove from weekly plan?',
+    `${taskId} will be removed from ${fmtWeek(state.week)}. The source task will remain.`,
+    async()=>{
+      try{
+        await server('removeWeeklyTask',Number(row));
+        invalidateWeek(state.week.start);
+        await loadWeek(state.week.start,true);
+        showToast(`${taskId} removed from this week`);
+      }catch(err){
+        showError(err);
+      }
+    }
+  );
+}
+
+async function updateWeeklyInline(row,field,value){
+  const item=state.weeklyPlan.find(w=>Number(w.weeklyRow)===Number(row));
+  if(!item)return;
+
+  const old=item[field];
+  const oldHours=item.estimatedHours;
+  item[field]=value;
+
+  if(field==='weeklyStatus'&&!taskUsesEstimatedHours({status:value})){
+    item.estimatedHours='';
+  }
+
+  try{
+    await server('updateWeeklyTaskField',row,field,value);
+    invalidateWeek(state.week.start);
+    state.weekCache[state.week.start]=state.weeklyPlan;
+    showToast(`${item.taskId} weekly plan updated`);
+    renderWeekly();
+  }catch(err){
+    item[field]=old;
+    item.estimatedHours=oldHours;
+    showError(err);
+    renderWeekly();
+  }
+}
+async function updateWeeklyNote(row,el){const item=state.weeklyPlan.find(w=>Number(w.weeklyRow)===Number(row));if(!item||String(item.planningNote||'')===el.value)return;const old=item.planningNote;item.planningNote=el.value;try{await server('updateWeeklyTaskField',row,'planningNote',el.value);invalidateWeek(state.week.start);state.weekCache[state.week.start]=state.weeklyPlan;showToast('Planning note saved')}catch(err){item.planningNote=old;showError(err)}}
+async function updateWeeklyHours(row,el){
+  const item=state.weeklyPlan.find(w=>Number(w.weeklyRow)===Number(row));
+  if(!item)return;
+
+  if(!weeklyUsesEstimatedHours(item)){
+    item.estimatedHours='';
+    el.value='';
+    return;
+  }
+
+  const value=Number(el.value);
+  if(!Number.isFinite(value)||value<=0||value>168){
+    showToast('Estimated hours must be greater than 0.','error');
+    el.value=item.estimatedHours||'';
+    return;
+  }
+  const old=item.estimatedHours;
+  item.estimatedHours=Math.round(value*4)/4;
+  try{
+    await server('updateWeeklyTaskField',row,'estimatedHours',item.estimatedHours);
+    invalidateWeek(state.week.start);
+    state.weekCache[state.week.start]=state.weeklyPlan;
+    showToast(`${item.taskId} estimate updated`);
+    renderWeekly();
+  }catch(err){
+    item.estimatedHours=old;
+    showError(err);
+    renderWeekly();
+  }
+}
+
+async function changeWeek(delta){if(!state.week)return;const target=shiftWeek(state.week.start,delta);await loadWeek(target,true)}
+function invalidateWeek(start){delete state.weekCache[start]}
+async function loadWeek(start,force){const normalized=String(start);if(!force&&state.weekCache[normalized]){state.week={start:normalized,end:dateKey(new Date(parseLocalDate(normalized).getTime()+4*86400000))};state.weeklyPlan=state.weekCache[normalized];state.capacity=state.capacityCache[normalized]||{owners:{},defaultHours:40,weekStart:normalized};state.loadingWeek=false;render();prefetchAround(normalized);return}state.loadingWeek=true;const oldWeek=state.week,oldCapacity=state.capacity;state.week={start:normalized,end:dateKey(new Date(parseLocalDate(normalized).getTime()+4*86400000))};render();try{const data=await server('getWeekData',normalized);state.week=data.week;state.todayWeek=data.todayWeek;state.weeklyPlan=data.weeklyPlan||[];state.capacity=data.capacity||{owners:{},defaultHours:40,weekStart:state.week.start};state.weekCache[state.week.start]=state.weeklyPlan;state.capacityCache[state.week.start]=state.capacity;state.loadingWeek=false;render();if(data.carriedOverCount)showToast(`${data.carriedOverCount} unfinished task${data.carriedOverCount===1?'':'s'} carried over from last week`);prefetchAround(state.week.start)}catch(err){state.loadingWeek=false;if(oldWeek)state.week=oldWeek;if(oldCapacity)state.capacity=oldCapacity;showError(err);render()}}
+async function prefetchAround(start){const targets=[shiftWeek(start,-1),shiftWeek(start,1),shiftWeek(start,-2),shiftWeek(start,2)].filter(s=>!state.weekCache[s]);if(!targets.length)return;try{const batch=await server('getWeekDataBatch',targets);(batch||[]).forEach(x=>{state.weekCache[x.week.start]=x.weeklyPlan||[];state.capacityCache[x.week.start]=x.capacity||{owners:{},defaultHours:40,weekStart:x.week.start};})}catch(e){console.warn('Week prefetch failed',e)}}
+</script>

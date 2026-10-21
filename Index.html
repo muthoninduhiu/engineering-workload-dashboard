@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Engineering Workload</title>
+  <?!= include('Styles'); ?>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><div class="brand-mark">EW</div><div class="brand-name">Engineering Workload</div></div>
+    <div class="top-spacer"></div>
+    <div class="top-search"><input id="globalSearch" placeholder="Search tasks, IDs, owners..." oninput="handleGlobalSearch(this.value)"></div>
+    <button class="btn top-refresh" id="topRefreshBtn"
+    onclick="refreshCurrentData()" title="Refresh dashboard data"
+    aria-label="Refresh dashboard data"><span class="refresh-icon"
+    aria-hidden="true"></span>🗘<span class="refresh-label"></span></button>
+    <button class="btn primary" id="topAddBtn" onclick="openNewTask()"> ＋ Add task</button>
+    <button class="account" id="accountButton" onclick="signOutApp()" title="Sign out of Engineering Workload" style="cursor:pointer"><div class="avatar" id="accountAvatar">M</div><div><div id="accountName">Loading…</div><div class="role" id="accountRole"></div></div></button>
+  </header>
+
+  <div class="mobile-side-backdrop" id="mobileSideBackdrop" onclick="toggleMobileSidebar(false)"></div>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="nav-group" id="mainNav"></div>
+      <div class="side-bottom" id="adminNav"></div>
+    </aside>
+    <main class="main" id="main"><div class="loading"><div><div class="spinner"></div>Loading engineering workload…</div></div></main>
+  </div>
+
+  <nav class="bottom-nav" id="bottomNav"></nav>
+</div>
+
+<div class="drawer-backdrop" id="drawerBackdrop" onclick="closeTaskDrawer()"></div>
+<aside class="drawer" id="taskDrawer"></aside>
+
+<div class="modal-backdrop" id="taskModal"><div class="modal" id="taskModalCard"></div></div>
+<div class="modal-backdrop" id="userModal"><div class="modal" id="userModalCard"></div></div>
+<div class="modal-backdrop" id="confirmModal"><div class="modal" style="width:min(420px,94vw)" id="confirmModalCard"></div></div>
+<div class="toast-wrap" id="toastWrap"></div>
+
+  <?!= include('00_State'); ?>
+  <?!= include('10_Auth'); ?>
+  <?!= include('20_Shell'); ?>
+  <?!= include('30_SummaryView'); ?>
+  <?!= include('40_TasksView'); ?>
+  <?!= include('50_WeeklyView'); ?>
+  <?!= include('60_AdminView'); ?>
+  <?!= include('70_TaskForms'); ?>
+  <?!= include('99_App'); ?>
+</body>
+</html>

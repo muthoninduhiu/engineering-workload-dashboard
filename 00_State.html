@@ -1,0 +1,174 @@
+<script>
+const STATUS_COLUMNS = [
+  {key:'Backlog',label:'Backlog',css:'backlog',titleCss:''},
+  {key:'Todo',label:'Todo',css:'todo',titleCss:'todo-t'},
+  {key:'In Progress',label:'In Progress',css:'progress',titleCss:'progress-t'},
+  {key:'QA',label:'QA / Review',css:'qa',titleCss:'qa-t'},
+  {key:'Blocked',label:'Blocked',css:'blocked',titleCss:'blocked-t'},
+  {key:'Done',label:'Done',css:'done',titleCss:'done-t'}
+];
+const COMMON_STATUSES=['Backlog','Not Started','Todo','In Progress','In Review','QA','Testing','Retest','Awaiting Tech Fix','Blocked','Failed','Done','Passed','Closed'];
+const PRIORITIES=['P0','P1','P2','P3'];
+const COMMITMENTS=['Commit','Stretch','Watch / Unblock'];
+const state={
+  view:'summary',overviewMode:'portfolio',overviewProduct:'',period:{type:'week',start:'',end:''},taskMode:'table',tasks:[],weeklyPlan:[],week:null,todayWeek:null,weekCache:{},routing:[],access:null,validation:null,
+  users:[],auditStatus:null,filters:{search:'',product:'',owner:'',priority:'',status:'',weekOnly:false},weeklyFilters:{product:'',owner:'',status:'',showCompleted:false},
+  taskPage:1,taskPageSize:50,weeklyCollapsedOwners:{},validationSetupResults:[],validationSetupOperations:{successful:[],skipped:[],failed:[]},capacity:{owners:{},defaultHours:40},capacityCache:{},
+  mobileStatus:'In Progress',selectedTask:null,selectedTaskOriginal:null,loadingWeek:false,usersLoaded:false,auditLoaded:false,
+  pendingCreated:{},bootstrap:null,appReady:false,refreshing:false,sessionToken:localStorage.getItem('ewSessionToken')||'',publicBootstrap:null,activity:[],activityLoaded:false,activityLoading:false,activityPage:1,activityMode:'changes',taskHistory:{},accessRequests:[]
+};
+let taskSearchTimer=null;
+
+function rawServer(method,...args){
+  return new Promise((resolve,reject)=>{
+    const runner=google.script.run.withSuccessHandler(resolve).withFailureHandler(err=>reject(new Error((err&&err.message)||String(err))));
+    runner[method](...args);
+  });
+}
+function server(method,...args){
+  return rawServer('apiCall',{action:method,args:args,sessionToken:state.sessionToken});
+}
+function isSessionError(err){return /APP_SESSION_REQUIRED|APP_SESSION_EXPIRED/i.test((err&&err.message)||String(err||''));}
+function saveSession(result){
+  state.sessionToken=result&&result.sessionToken||'';
+  if(state.sessionToken)localStorage.setItem('ewSessionToken',state.sessionToken);
+  else localStorage.removeItem('ewSessionToken');
+  state.access=result&&result.access||null;
+  const email=result&&result.access&&result.access.email;
+  if(email)localStorage.setItem('ewVerifiedEmail',email);
+}
+function esc(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function initials(name){const s=String(name||'?').trim().split(/\s+/).filter(Boolean);return (s.length>1?(s[0][0]+s[s.length-1][0]):(s[0]||'?').slice(0,2)).toUpperCase();}
+function uniq(arr){return [...new Set(arr.filter(Boolean))].sort((a,b)=>String(a).localeCompare(String(b)));}
+function fmtDate(v){if(!v)return '—';const p=String(v).slice(0,10).split('-').map(Number);if(p.length!==3||!p[0])return esc(v);return new Date(p[0],p[1]-1,p[2]).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});}
+function fmtWeek(w){if(!w)return '—';const a=parseLocalDate(w.start),b=parseLocalDate(w.end);const sameMonth=a.getMonth()===b.getMonth();return sameMonth?`${a.toLocaleDateString(undefined,{month:'short'})} ${a.getDate()} – ${b.getDate()}, ${b.getFullYear()}`:`${a.toLocaleDateString(undefined,{month:'short',day:'numeric'})} – ${b.toLocaleDateString(undefined,{month:'short',day:'numeric'})}, ${b.getFullYear()}`;}
+function parseLocalDate(s){const p=String(s||'').slice(0,10).split('-').map(Number);return new Date(p[0],(p[1]||1)-1,p[2]||1);}
+function dateKey(d){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;}
+function shiftWeek(start,delta){const d=parseLocalDate(start);d.setDate(d.getDate()+delta*7);return dateKey(d);}
+function periodDateRange(){
+  const period=state.period||{type:'week',start:'',end:''};
+  const anchor=parseLocalDate((state.week&&state.week.start)||dateKey(new Date()));
+  const start=new Date(anchor.getFullYear(),anchor.getMonth(),1);
+  const end=new Date(anchor.getFullYear(),anchor.getMonth()+1,0);
+  if(period.type==='custom')return {start:period.start||'',end:period.end||''};
+  if(period.type==='week')return {start:state.week&&state.week.start||dateKey(anchor),end:state.week&&state.week.end||dateKey(anchor)};
+  if(period.type==='quarter'){
+    const quarterStart=Math.floor(anchor.getMonth()/3)*3;
+    return {start:dateKey(new Date(anchor.getFullYear(),quarterStart,1)),end:dateKey(new Date(anchor.getFullYear(),quarterStart+3,0))};
+  }
+  if(period.type==='half'){
+    const halfStart=anchor.getMonth()<6?0:6;
+    return {start:dateKey(new Date(anchor.getFullYear(),halfStart,1)),end:dateKey(new Date(anchor.getFullYear(),halfStart+6,0))};
+  }
+  if(period.type==='year')return {start:dateKey(new Date(anchor.getFullYear(),0,1)),end:dateKey(new Date(anchor.getFullYear(),12,0))};
+  return {start:dateKey(start),end:dateKey(end)};
+}
+function taskMatchesSelectedPeriod(task){
+  const due=String(task&&task.dueDate||'').slice(0,10);
+  if(!due)return false;
+  const range=periodDateRange();
+  if((state.period&&state.period.type==='custom'&&!range.start&&!range.end)||
+     (range.start&&range.end&&range.start>range.end))return false;
+  return (!range.start||due>=range.start)&&(!range.end||due<=range.end);
+}
+function periodRangeIsValid(){
+  const range=periodDateRange();
+  return !(range.start&&range.end&&range.start>range.end);
+}
+function periodLabel(){
+  const range=periodDateRange();
+  return range.start&&range.end
+    ?`${fmtDate(range.start)} – ${fmtDate(range.end)}`
+    :range.start?`From ${fmtDate(range.start)}`:range.end?`Through ${fmtDate(range.end)}`:'Choose a custom due-date range';
+}
+function renderPeriodControls(){
+  const period=state.period||{type:'week',start:'',end:''};
+  const customMissing=period.type==='custom'&&!period.start&&!period.end;
+  return `<div class="period-controls"><label class="period-filter"><span>Due-date period</span><select class="control" aria-label="Due-date period" onchange="setPeriodType(this.value)">
+    ${[['week','Week'],['month','Month'],['quarter','Quarter'],['half','Half-year'],['year','Year'],['custom','Custom']].map(([value,label])=>`<option value="${value}" ${period.type===value?'selected':''}>${label}</option>`).join('')}
+  </select></label>${period.type==='custom'?`<label class="period-filter"><span>From</span><input class="control" type="date" aria-label="Period start date" value="${esc(period.start||'')}" onchange="setPeriodDate('start',this.value)"></label><label class="period-filter"><span>To</span><input class="control" type="date" aria-label="Period end date" value="${esc(period.end||'')}" onchange="setPeriodDate('end',this.value)"></label>`:''}<span class="period-range-caption">${!periodRangeIsValid()?'Start date must be on or before end date.':customMissing?'Choose a start date, end date, or both.':esc(periodLabel())}</span></div>`;
+}
+function setPeriodType(type){
+  const allowed=['week','month','quarter','half','year','custom'];
+  state.period=Object.assign({},state.period,{type:allowed.includes(type)?type:'week'});
+  refreshPeriodViews();
+}
+function setPeriodDate(bound,value){
+  if(bound!=='start'&&bound!=='end')return;
+  state.period=Object.assign({},state.period,{type:'custom',[bound]:value||''});
+  refreshPeriodViews();
+}
+function refreshPeriodViews(){
+  resetTaskPage();
+  if(state.view==='summary')renderSummary();
+  else if(state.view==='tasks')renderTasks();
+}
+function groupStatus(task){const g=String(task.statusGroup||'').toLowerCase().trim();if(g==='backlog'||g==='not started')return 'Backlog';if(g==='todo')return 'Todo';if(g==='in progress')return 'In Progress';if(g==='qa'||g==='in review')return 'QA';if(g==='blocked')return 'Blocked';if(g==='done')return 'Done';const s=String(task.status||'').toLowerCase().trim();if(/done|complete|resolved|passed|closed/.test(s))return 'Done';if(/block|failed|awaiting tech/.test(s))return 'Blocked';if(/qa|test|review|retest/.test(s))return 'QA';if(/progress|active|doing/.test(s))return 'In Progress';if(s==='backlog'||s==='none'||s==='not started'||s==='not-started'||s==='not_started')return 'Backlog';return 'Todo';}
+function statusBadge(status){const g=groupStatus({status,statusGroup:status});const c=g==='Done'?'green':g==='Blocked'?'red':g==='QA'?'violet':g==='In Progress'?'brand':g==='Todo'?'blue':'gray';return `<span class="badge ${c}">${esc(status||g)}</span>`;}
+function displayProduct(product){const p=String(product||'');if(p==='MediaPal')return 'Mediapal';if(p==='WePlay')return 'Weplay';return p||'General';}
+function productBadge(product){const p=String(product||'');const c=p==='MediaPal'?'green':p==='WePlay'?'violet':p==='Nano'?'blue':p==='ShowApp'?'violet':p==='Klima'?'gray':'gray';return `<span class="badge ${c}">${esc(displayProduct(p))}</span>`;}
+function priorityBadge(p){const c=p==='P0'?'red':p==='P1'?'orange':p==='P2'?'blue':'gray';return `<span class="badge ${c}">${esc(p||'P2')}</span>`;}
+function commitmentBadge(v){const n=String(v||'');const c=n==='Commit'?'green':n==='Stretch'?'violet':'orange';return `<span class="badge ${c}">${esc(n)}</span>`;}
+function showToast(msg,type='success'){const el=document.createElement('div');el.className=`toast ${type}`;el.textContent=msg;document.getElementById('toastWrap').appendChild(el);setTimeout(()=>el.remove(),3600);}
+function parseAccessError(err){
+  const raw=(err&&err.message)||String(err||'');
+  const accessMarker='APP_ACCESS_DENIED||';
+  const configMarker='APP_CONFIGURATION_ERROR||';
+
+  if(raw.includes(accessMarker)){
+    const payload=raw.slice(raw.indexOf(accessMarker)+accessMarker.length);
+    const parts=payload.split('||');
+    return {
+      type:'access',
+      scope:parts[0]||'WORKBOOK',
+      label:parts[1]||'requested workbook',
+      spreadsheetId:parts[2]||'',
+      email:parts[3]||'',
+      required:parts[4]||'access',
+      detail:parts.slice(5).join('||')||''
+    };
+  }
+
+  if(raw.includes(configMarker)){
+    return {
+      type:'configuration',
+      message:raw.slice(raw.indexOf(configMarker)+configMarker.length)
+    };
+  }
+
+  if(/do not have permission|permission to access|access denied/i.test(raw)){
+    const b=state.bootstrap||{};
+    const a=(b.access||state.access||{});
+    const d=b.dashboard||{};
+    return {
+      type:'access',
+      scope:'DASHBOARD',
+      label:d.label||'Engineering Workload dashboard',
+      spreadsheetId:d.spreadsheetId||'',
+      email:a.email||'',
+      required:'Viewer access or higher',
+      detail:raw
+    };
+  }
+
+  return null;
+}
+function friendlyErrorMessage(err){
+  const parsed=parseAccessError(err);
+  if(!parsed)return (err&&err.message)||String(err);
+  if(parsed.type==='configuration')return parsed.message;
+  const who=parsed.email&&parsed.email!=='unidentified Google account'?` Signed in as ${parsed.email}.`:'';
+  return `Cannot access ${parsed.label}. ${parsed.required} is required.${who}`;
+}
+function showError(err){console.error(err);showToast(friendlyErrorMessage(err),'error');}
+function canView(){return !!(state.access&&state.access.canView)}function canEdit(){return !!(state.access&&state.access.canEdit)}function canAdmin(){return !!(state.access&&state.access.canAdmin)}
+
+function normalizeSearchText(v){return String(v??'').toLowerCase().replace(/\s+/g,' ').trim();}
+function taskSearchHaystack(t){return normalizeSearchText([t.taskId,t.title,t.owner,t.product,displayProduct(t.product),t.rawProduct,t.workstream,t.sourceSheet,t.status,t.statusGroup,t.priority,t.normalizedPriority,t.dependency].filter(Boolean).join(' '));}
+function taskMatchesSearch(t,q){const tokens=normalizeSearchText(q).split(' ').filter(Boolean);if(!tokens.length)return true;const hay=taskSearchHaystack(t);return tokens.every(token=>hay.includes(token));}
+function syncSearchInputs(value){const v=String(value??'');const global=document.getElementById('globalSearch');if(global&&global.value!==v)global.value=v;const local=document.getElementById('taskSearchInput');if(local&&local.value!==v)local.value=v;}
+function queueTaskResultsRender(){clearTimeout(taskSearchTimer);taskSearchTimer=setTimeout(()=>{if(state.view==='tasks')renderTaskResults();},70);}
+function mergePendingCreated(serverTasks){const live=Array.isArray(serverTasks)?serverTasks.slice():[];const byId=new Map(live.map(t=>[String(t.taskId||'').toLowerCase(),t]));Object.keys(state.pendingCreated||{}).forEach(key=>{if(byId.has(key)){delete state.pendingCreated[key];return;}live.unshift(state.pendingCreated[key]);});return live;}
+function optimisticCreatedTask(r,payload){return Object.assign({rowIndex:null,taskId:r.taskId,title:payload.title,owner:payload.owner||'Unassigned',product:r.product||payload.product,rawProduct:r.product||payload.product,workstream:r.workstream||payload.workstream,sourceSheet:r.targetSheet||payload.sourceSheet,priority:payload.priority,normalizedPriority:payload.priority,status:payload.status,statusGroup:groupStatus({status:payload.status}),dependency:payload.dependency||'',dueDate:payload.dueDate||'',points:payload.points===''?'':Number(payload.points),closed:groupStatus({status:payload.status})==='Done',pendingSync:true},r.task||{});}
+async function reconcileCreatedTask(taskId,attempt=0){const key=String(taskId||'').toLowerCase();if(!key)return;try{const t=await server('getTaskById',taskId);if(t){const i=state.tasks.findIndex(x=>String(x.taskId||'').toLowerCase()===key);if(i>=0)state.tasks[i]=t;else state.tasks.unshift(t);if(!t.pendingSync&&(Number(t.rowIndex)||t.sourceBacked)){delete state.pendingCreated[key];if(state.view==='tasks')renderTaskResults();return;}state.pendingCreated[key]=t;if(state.view==='tasks')renderTaskResults();}}catch(e){console.warn('Task reconciliation failed',e)}if(attempt<7)setTimeout(()=>reconcileCreatedTask(taskId,attempt+1),[700,1200,2000,3200,5000,8000,12000,18000][attempt]);}
+</script>

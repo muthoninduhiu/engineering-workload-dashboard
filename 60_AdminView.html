@@ -1,0 +1,456 @@
+<script>
+function activityTime(v){
+  try{
+    return new Date(v).toLocaleString(
+      undefined,
+      {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}
+    );
+  }catch(e){
+    return v||'—';
+  }
+}
+
+function activityDateTime(v){
+  try{
+    return new Date(v).toLocaleString(
+      undefined,
+      {
+        weekday:'short',
+        year:'numeric',
+        month:'short',
+        day:'numeric',
+        hour:'2-digit',
+        minute:'2-digit',
+        second:'2-digit'
+      }
+    );
+  }catch(e){
+    return v||'—';
+  }
+}
+
+function activitySourceBadge(origin){
+  const o=origin||'App';
+  if(o==='Direct Sheet')return '<span class="badge gray">Direct Sheet</span>';
+  if(o==='System')return '<span class="badge orange">System</span>';
+  return '<span class="badge blue">App</span>';
+}
+
+function activityValuePreview(value){
+  const raw=String(value||'').trim();
+  if(!raw)return '—';
+  const flat=raw.replace(/\s+/g,' ');
+  return flat.length>68?flat.slice(0,65)+'…':flat;
+}
+
+function prettyActivityValue(value){
+  const raw=String(value||'').trim();
+  if(!raw)return '—';
+
+  try{
+    const parsed=JSON.parse(raw);
+    return JSON.stringify(parsed,null,2);
+  }catch(e){
+    return raw;
+  }
+}
+
+async function renderChangelog(){
+  const main=document.getElementById('main');
+
+  main.innerHTML=
+    pageHead(
+      'Changelog',
+      'Audit trail for app changes, direct-sheet edits and system activity.'
+    )+
+    '<div class="loading"><div><div class="spinner"></div>Loading changelog…</div></div>';
+
+  try{
+    if(!state.activityLoaded){
+      state.activity=await server('getActivityLog',800);
+      state.activityLoaded=true;
+    }
+
+    const rows=state.activity||[];
+    const users=uniq(rows.map(x=>x.userName||x.userEmail));
+    const products=uniq(rows.map(x=>x.product));
+    const actions=uniq(rows.map(x=>x.action));
+
+    main.innerHTML=
+      pageHead(
+        'Changelog',
+        'Audit trail for app changes, direct-sheet edits and system activity.'
+      )+
+      `<div class="audit-filter-shell">
+        <div class="toolbar audit-toolbar">
+          <input
+            class="control search"
+            id="logSearch"
+            placeholder="Search task, user, action, field…"
+            oninput="renderChangelogRows()"
+          >
+
+          <select class="control" id="logUser" onchange="renderChangelogRows()">
+            <option value="">All users</option>
+            ${users.map(u=>`<option>${esc(u)}</option>`).join('')}
+          </select>
+
+          <select class="control" id="logProduct" onchange="renderChangelogRows()">
+            <option value="">All products</option>
+            ${products.map(p=>`<option value="${esc(p)}">${esc(displayProduct(p))}</option>`).join('')}
+          </select>
+
+          <select class="control" id="logAction" onchange="renderChangelogRows()">
+            <option value="">All actions</option>
+            ${actions.map(a=>`<option value="${esc(a)}">${esc(a)}</option>`).join('')}
+          </select>
+
+          <select class="control" id="logOrigin" onchange="renderChangelogRows()">
+            <option value="">All sources</option>
+            <option>App</option>
+            <option>Direct Sheet</option>
+            <option>System</option>
+          </select>
+
+          <button class="btn" onclick="refreshChangelog()">↻ Refresh</button>
+        </div>
+
+        <div id="changelogSummary"></div>
+      </div>
+
+      <div id="changelogRows"></div>`;
+
+    renderChangelogRows();
+  }catch(err){
+    showError(err);
+    main.innerHTML+=`<div class="panel"><div class="empty">${esc((err&&err.message)||String(err))}</div></div>`;
+  }
+}
+
+function filteredActivityRows(){
+  const q=normalizeSearchText((document.getElementById('logSearch')||{}).value||'');
+  const u=(document.getElementById('logUser')||{}).value||'';
+  const p=(document.getElementById('logProduct')||{}).value||'';
+  const a=(document.getElementById('logAction')||{}).value||'';
+  const o=(document.getElementById('logOrigin')||{}).value||'';
+
+  return (state.activity||[])
+    .map((x,index)=>({...x,__activityIndex:index}))
+    .filter(x=>{
+      const hay=normalizeSearchText(
+        [
+          x.taskId,x.taskName,x.userName,x.userEmail,x.action,x.field,
+          x.oldValue,x.newValue,x.details,x.product,x.sourceSheet,x.origin
+        ].join(' ')
+      );
+
+      return(
+        (!q||q.split(' ').every(t=>hay.includes(t)))&&
+        (!u||(x.userName||x.userEmail)===u)&&
+        (!p||x.product===p)&&
+        (!a||x.action===a)&&
+        (!o||x.origin===o)
+      );
+    });
+}
+
+function renderChangelogSummary(rows){
+  const box=document.getElementById('changelogSummary');
+  if(!box)return;
+  const tasks=new Set(rows.map(x=>x.taskId).filter(Boolean)).size;
+  const users=new Set(rows.map(x=>x.userEmail||x.userName).filter(Boolean)).size;
+  box.innerHTML=`<div class="ew-audit-summary"><span><b>${rows.length}</b> events</span><span><b>${tasks}</b> tasks</span><span><b>${users}</b> people</span><span class="ew-audit-summary-note">Select an event to inspect its changes</span></div>`;
+}
+
+function renderChangelogRows(){
+  const box=document.getElementById('changelogRows');
+  if(!box)return;
+  const rows=filteredActivityRows();
+  renderChangelogSummary(rows);
+  box.innerHTML=`<section class="panel ew-audit-feed">
+    <div class="ew-audit-feed-head"><b>Activity</b><span>${rows.length} matching events</span></div>
+    ${rows.length?rows.map(x=>`
+      <button type="button" class="ew-audit-event" onclick="openActivityDetail(${x.__activityIndex})">
+        <span class="ew-audit-event-symbol">${x.origin==='Direct Sheet'?'↗':x.origin==='System'?'⚙':'↻'}</span>
+        <span class="ew-audit-event-main">
+          <span class="ew-audit-event-title">${esc(x.action||'Change')}</span>
+          <span class="ew-audit-event-context">${esc(x.taskId?x.taskId+' · ':'')}${esc(x.taskName||x.field||x.entityType||'System activity')}</span>
+          <span class="ew-audit-event-sub">${esc(x.userName||x.userEmail||'Unknown')} · ${esc(x.product?displayProduct(x.product):'System')} · ${esc(x.origin||'App')}</span>
+        </span>
+        <span class="ew-audit-event-side"><time>${esc(activityTime(x.timestamp))}</time><span>Details →</span></span>
+      </button>`).join(''):'<div class="empty">No matching events. Try changing the filters.</div>'}
+  </section>`;
+}
+
+function activityDetailBlock(label,value,cssClass){
+  return `<div class="audit-detail-block ${cssClass||''}">
+    <div class="audit-detail-label">${esc(label)}</div>
+    <pre>${esc(prettyActivityValue(value))}</pre>
+  </div>`;
+}
+
+function openActivityDetail(index){
+  const x=(state.activity||[])[Number(index)];
+  if(!x)return;
+
+  state.selectedTask=null;
+  state.selectedTaskOriginal=null;
+  window.__drawerContext={type:'activity',index:Number(index)};
+
+  document.getElementById('taskDrawer').innerHTML=
+    `<div class="drawer-head">
+       <div>
+         <div class="drawer-id">${esc(x.origin||'App')} · ${esc(activityDateTime(x.timestamp))}</div>
+         <div class="drawer-title">${esc(x.action||'Change details')}</div>
+       </div>
+       <button class="drawer-close" onclick="closeTaskDrawer()">×</button>
+     </div>
+
+     <div class="drawer-body">
+       <div class="audit-detail-meta">
+         <div>
+           <span>User</span>
+           <b>${esc(x.userName||x.userEmail||'Unknown')}</b>
+           <small>${esc(x.userEmail||'')}</small>
+         </div>
+         <div>
+           <span>Source</span>
+           <b>${esc(x.origin||'App')}</b>
+           <small>${esc(x.sourceSheet||'')}</small>
+         </div>
+         <div>
+           <span>Product</span>
+           <b>${esc(x.product?displayProduct(x.product):'—')}</b>
+           <small>${esc(x.entityType||'')}</small>
+         </div>
+         <div>
+           <span>Field</span>
+           <b>${esc(x.field||'—')}</b>
+           <small>${esc(x.weekStart?`Week ${x.weekStart}`:'')}</small>
+         </div>
+       </div>
+
+       ${x.taskId||x.taskName
+         ?`<div class="drawer-section">
+             <div class="drawer-section-title">Task</div>
+             <div class="audit-task-card">
+               <div>
+                 <b>${esc(x.taskId||'')}</b>
+                 <div>${esc(x.taskName||'')}</div>
+               </div>
+               ${x.taskId?`<button class="btn sm" onclick="openTask('${esc(x.taskId)}')">Open task →</button>`:''}
+             </div>
+           </div>`
+         :''}
+
+       <div class="drawer-section">
+         <div class="drawer-section-title">Change</div>
+         <div class="audit-detail-grid">
+           ${activityDetailBlock('Before',x.oldValue,'before')}
+           ${activityDetailBlock('After',x.newValue,'after')}
+         </div>
+       </div>
+
+       ${x.details
+         ?`<div class="drawer-section">
+             <div class="drawer-section-title">Details</div>
+             ${activityDetailBlock('Context',x.details,'details')}
+           </div>`
+         :''}
+
+       <div class="drawer-section">
+         <div class="drawer-section-title">Audit metadata</div>
+         <div class="source-detail-grid">
+           <div class="source-detail-item">
+             <div class="source-detail-label">Timestamp</div>
+             <div class="source-detail-value">${esc(activityDateTime(x.timestamp))}</div>
+           </div>
+           <div class="source-detail-item">
+             <div class="source-detail-label">Request ID</div>
+             <div class="source-detail-value">${esc(x.requestId||'—')}</div>
+           </div>
+           <div class="source-detail-item">
+             <div class="source-detail-label">Entity type</div>
+             <div class="source-detail-value">${esc(x.entityType||'—')}</div>
+           </div>
+           <div class="source-detail-item">
+             <div class="source-detail-label">Source sheet</div>
+             <div class="source-detail-value">${esc(x.sourceSheet||'—')}</div>
+           </div>
+         </div>
+       </div>
+     </div>
+
+     <div class="drawer-foot">
+       <button class="btn" onclick="closeTaskDrawer()">Close</button>
+       ${x.taskId?`<button class="btn primary" onclick="openTask('${esc(x.taskId)}')">Open task</button>`:''}
+     </div>`;
+
+  document.getElementById('drawerBackdrop').classList.add('open');
+  document.getElementById('taskDrawer').classList.add('open');
+}
+
+async function refreshChangelog(){
+  try{
+    state.activity=await server('getActivityLog',800);
+    state.activityLoaded=true;
+    renderChangelog();
+    showToast('Changelog refreshed');
+  }catch(err){
+    showError(err);
+  }
+}
+
+
+async function renderUsers(){if(!canAdmin()){goView('summary');return}const main=document.getElementById('main');main.innerHTML=pageHead('Users','Manage app access, roles, auditing and source-sheet validation.',`<button class="btn primary" onclick="openUserModal()">＋ Add user</button>`)+`<div class="loading"><div><div class="spinner"></div>Loading users…</div></div>`;try{if(!state.usersLoaded){const d=await server('getAccessAdminData');state.users=d.users||[];state.accessRequests=d.requests||[];state.usersLoaded=true}if(!state.auditLoaded){state.auditStatus=await server('getDirectAuditTriggerStatus');state.auditLoaded=true}main.innerHTML=pageHead('Users','Manage app access, roles, auditing and source-sheet validation.',`<button class="btn primary" onclick="openUserModal()">＋ Add user</button>`)+usersHtml()}catch(err){main.innerHTML+=`<div class="panel"><div class="empty">${esc(err.message)}</div></div>`;showError(err)}}
+function usersHtml(){
+  const users=state.users||[],req=state.accessRequests||[],audit=state.auditStatus||[],ok=audit.filter(x=>x.installed).length;
+  return `<section class="panel"><div class="panel-head"><div><div class="panel-title">App access</div><div class="panel-sub">One app link. Raw source sheets stay private.</div></div></div><div class="panel-body" style="padding:0"><div class="table-wrap" style="border:0;border-radius:0"><table class="task-table" style="min-width:760px"><thead><tr><th>User</th><th>Role</th><th>Products</th><th>Status</th><th></th></tr></thead><tbody>${users.map(u=>`<tr><td><span style="display:flex;align-items:center;gap:8px"><span class="avatar">${initials(u.name)}</span><span><b>${esc(u.name||u.email)}</b><div class="subline">${esc(u.email)}</div></span></span></td><td><select class="inline-select" ${u.email===state.access.email?'disabled':''} onchange="changeUserRole('${esc(u.email)}','${esc(u.name)}',this.value,${u.active})"><option ${u.role==='Viewer'?'selected':''}>Viewer</option><option ${u.role==='Editor'?'selected':''}>Editor</option><option ${u.role==='Executive'?'selected':''}>Executive</option><option ${u.role==='Admin'?'selected':''}>Admin</option></select></td><td>${u.role==='Admin'||u.role==='Executive'?'<span class="badge brand">All products</span>':(u.products||[]).map(productBadge).join(' ')||'<span class="subline">No products</span>'}</td><td>${u.active?'<span class="badge green">Active</span>':'<span class="badge gray">Inactive</span>'}</td><td>${u.email!==state.access.email?`<div style="display:flex;gap:6px"><button class="btn sm" onclick="openUserModal('${esc(u.email)}')">Edit scope</button><button class="btn sm ${u.active?'danger':''}" onclick="toggleUserActive('${esc(u.email)}','${esc(u.name)}','${esc(u.role)}',${u.active})">${u.active?'Deactivate':'Activate'}</button></div>`:''}</td></tr>`).join('')}</tbody></table></div></div></section>
+  ${req.length?`<section class="panel audit-card"><div class="panel-head"><div><div class="panel-title">Pending access requests</div><div class="panel-sub">Approve a role and product scope — no Sheet sharing required.</div></div></div><div class="panel-body">${req.map(r=>`<div class="validation-row"><div><b>${esc(r.name||r.email)}</b><div class="subline">${esc(r.email)} · ${esc(r.note||'No note')} · ${esc(activityTime(r.requestedAt))}</div></div><button class="btn sm primary" onclick="approveRequest('${esc(r.email)}','${esc(r.name||'')}')">Approve</button></div>`).join('')}</div></section>`:''}
+  <section class="panel audit-card"><div class="panel-head"><div><div class="panel-title">Direct Google Sheets auditing</div><div class="panel-sub">Optional protection for the few people who still edit raw source sheets.</div></div></div><div class="panel-body"><div class="audit-summary"><b>${ok} of ${audit.length}</b> workbooks fully monitored.<button class="btn primary sm" onclick="installAudit()">Install / repair triggers</button><button class="btn sm" onclick="refreshAudit()">↻ Refresh</button></div><div class="subline" style="margin:8px 0 12px">Normal app users do not need raw Sheet access. These triggers only cover direct edits by people who separately have Sheet access.</div><div class="audit-scroll"><table class="audit-table"><thead><tr><th>Workbook</th><th>Edit trigger</th><th>Structural-change trigger</th><th>Status</th></tr></thead><tbody>${audit.map(x=>`<tr><td><b>${esc(x.label)}</b><div class="subline">${esc(x.spreadsheetId)}</div></td><td class="${x.editInstalled?'ok':'warn'}">${x.editInstalled?'Installed':'Missing'}</td><td class="${x.changeInstalled?'ok':'warn'}">${x.changeInstalled?'Installed':'Missing'}</td><td>${x.installed?'<span class="badge green">Protected</span>':'<span class="badge orange">Needs setup</span>'}</td></tr>`).join('')}</tbody></table></div></div></section>
+  <section class="panel audit-card">
+    <div class="panel-head"><div><div class="panel-title">Google Sheets data validation</div><div class="panel-sub">Optional guardrails for direct manual edits. App validation continues even if a raw sheet cannot be modified.</div></div></div>
+    <div class="panel-body">
+      <button class="btn primary sm" onclick="applySheetValidation()">Apply / repair validation</button>
+      ${validationSetupResultsHtml()}
+    </div>
+  </section>`;
+}
+function approveRequest(email,name){openUserModal();setTimeout(()=>{document.getElementById('u_email').value=email;document.getElementById('u_name').value=name||'';},0)}
+function validationOperationBadge(status){
+  if(status==='applied'){
+    return '<span class="badge green">Applied</span>';
+  }
+
+  if(status==='partial'){
+    return '<span class="badge orange">Partial</span>';
+  }
+
+  if(status==='failed'){
+    return '<span class="badge red">Failed</span>';
+  }
+
+  return '<span class="badge gray">Skipped</span>';
+}
+
+function validationSetupResultsHtml(){
+  const rows=
+    state.validationSetupResults || [];
+
+  const operationGroups =
+    state.validationSetupOperations || {
+      successful:[],
+      skipped:[],
+      failed:[]
+    };
+
+  if(!rows.length){
+    return '<div class="subline" style="margin-top:10px">No validation run in this session.</div>';
+  }
+
+  const successful =
+    operationGroups.successful || [];
+
+  const skipped =
+    operationGroups.skipped || [];
+
+  const failed =
+    operationGroups.failed || [];
+
+  return `<div style="margin-top:12px">
+    <div class="audit-summary">
+      <span class="badge green">${successful.length} successful</span>
+      <span class="badge gray">${skipped.length} skipped</span>
+      ${failed.length?`<span class="badge red">${failed.length} failed</span>`:'<span class="badge green">0 failed</span>'}
+    </div>
+
+    <div class="audit-scroll" style="margin-top:10px">
+      <table class="audit-table">
+        <thead>
+          <tr>
+            <th>Sheet</th>
+            <th>Result</th>
+            <th>Operations</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(x=>`
+            <tr>
+              <td>
+                <b>${esc(x.product||'')}</b>
+                <div class="subline">${esc(x.sheet||'')} · ${esc(x.workbook||'')}</div>
+              </td>
+              <td>
+                ${validationOperationBadge(x.status)}
+                <div class="subline" style="margin-top:4px">${esc(x.detail||'')}</div>
+              </td>
+              <td>
+                ${(x.operations||[]).length
+                  ?(x.operations||[]).map(op=>`
+                    <div class="validation-op-row">
+                      ${validationOperationBadge(op.status)}
+                      <b>${esc(op.field||op.column||'Field')}</b>
+                      <span class="subline">${esc(op.column&&op.column!==op.field?` · ${op.column}`:'')}</span>
+                      <div class="subline">${esc(op.detail||'')}</div>
+                    </div>
+                  `).join('')
+                  :'<span class="subline">No field operations returned.</span>'}
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+async function applySheetValidation(){
+  try{
+    showToast('Running schema-aware validation…');
+
+    const r=
+      await server(
+        'applySourceDataValidation'
+      );
+
+    state.validationSetupResults=
+      r.results || [];
+
+    state.validationSetupOperations=
+      r.operations || {
+        successful:[],
+        skipped:[],
+        failed:[]
+      };
+
+    const s=
+      r.summary || {};
+
+    showToast(
+      `${s.successfulOperations||0} successful · ${s.skippedOperations||0} skipped · ${s.failedOperations||0} failed`,
+      (s.failedOperations||0)
+        ?'error'
+        :'success'
+    );
+
+    renderUsers();
+  }catch(err){
+    showError(err);
+  }
+}
+function openUserModal(existingEmail){
+  const products=['MediaPal','WePlay','Nano','ShowApp','Klima','Governance'];
+  const existing=(state.users||[]).find(u=>u.email===existingEmail)||null;
+  const role=existing?existing.role:'Viewer';
+  const selected=new Set(existing&&existing.products||[]);
+  document.getElementById('userModalCard').innerHTML=`<div class="modal-head"><h3>${existing?'Edit user':'Add user'}</h3></div><div class="modal-body"><div class="form-grid"><div class="field full"><label>Name</label><input id="u_name" value="${esc(existing&&existing.name||'')}" placeholder="Name"></div><div class="field full"><label>Verified email</label><input id="u_email" type="email" value="${esc(existing&&existing.email||'')}" ${existing?'disabled':''} placeholder="name@company.com"></div><div class="field full"><label>Role</label><select id="u_role" onchange="toggleUserProductFields()"><option ${role==='Viewer'?'selected':''}>Viewer</option><option ${role==='Editor'?'selected':''}>Editor</option><option ${role==='Executive'?'selected':''}>Executive</option><option ${role==='Admin'?'selected':''}>Admin</option></select></div><div class="field full" id="u_products_wrap"><label>Products</label><div style="display:flex;gap:10px;flex-wrap:wrap">${products.map(p=>`<label class="check-row"><input type="checkbox" name="u_product" value="${p}" ${selected.has(p)?'checked':''}> ${displayProduct(p)}</label>`).join('')}</div><div class="subline">Editors/Viewers only see selected products. Executives/Admins see the full portfolio.</div></div></div></div><div class="modal-foot"><button class="btn" onclick="closeModal('userModal')">Cancel</button><button class="btn primary" onclick="saveUser()">${existing?'Save changes':'Add user'}</button></div>`;
+  document.getElementById('userModal').classList.add('open');
+  toggleUserProductFields();
+}
+function toggleUserProductFields(){const role=(document.getElementById('u_role')||{}).value||'Viewer';const wrap=document.getElementById('u_products_wrap');if(wrap)wrap.style.opacity=(role==='Admin'||role==='Executive')?'.45':'1';}
+async function saveUser(){const payload={name:document.getElementById('u_name').value.trim(),email:document.getElementById('u_email').value.trim(),role:document.getElementById('u_role').value,products:[...document.querySelectorAll('input[name="u_product"]:checked')].map(x=>x.value),active:true};try{const r=await server('upsertAccessUser',payload);state.users=r.users||[];state.accessRequests=(state.accessRequests||[]).filter(x=>x.email!==payload.email);state.usersLoaded=true;closeModal('userModal');showToast('User saved');renderUsers()}catch(err){showError(err)}}
+async function changeUserRole(email,name,role,active){try{const current=(state.users||[]).find(u=>u.email===email)||{};const r=await server('upsertAccessUser',{email,name,role,products:current.products||[],active});state.users=r.users||[];showToast(`${name||email} updated`);renderUsers()}catch(err){showError(err);state.usersLoaded=false;renderUsers()}}
+function toggleUserActive(email,name,role,active){if(active){showConfirm('Deactivate user?',`${name||email} will lose edit/admin access.`,async()=>{try{const r=await server('deactivateAccessUser',email);state.users=r.users||[];showToast('User deactivated');renderUsers()}catch(err){showError(err)}})}else{(async()=>{try{const r=await server('upsertAccessUser',{email,name,role,products:((state.users||[]).find(u=>u.email===email)||{}).products||[],active:true});state.users=r.users||[];showToast('User activated');renderUsers()}catch(err){showError(err)}})()}}
+async function installAudit(){try{showToast('Installing audit triggers…');const r=await server('installDirectEditAuditTriggers');state.auditStatus=r.status||[];state.auditLoaded=true;showToast(r.success?'Direct auditing is fully protected':'Some workbooks still need setup',r.success?'success':'error');renderUsers()}catch(err){showError(err)}}
+async function refreshAudit(){try{state.auditStatus=await server('getDirectAuditTriggerStatus');state.auditLoaded=true;showToast('Audit status refreshed');renderUsers()}catch(err){showError(err)}}
+</script>

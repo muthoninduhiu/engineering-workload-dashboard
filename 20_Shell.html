@@ -1,0 +1,147 @@
+<script>
+function renderChrome(){
+  const a=state.access||{};
+  document.getElementById('accountName').textContent=a.name||a.email||(state.sessionToken?'Verified user':'Sign in');
+  document.getElementById('accountRole').textContent=a.role||'';
+  document.getElementById('accountAvatar').textContent=initials(a.name||a.email||'G');
+
+  const search=document.getElementById('globalSearch');
+  if(search)search.disabled=!state.appReady;
+
+  const topAddBtn=document.getElementById('topAddBtn');
+  const addingUser=state.view==='users'&&canAdmin();
+  topAddBtn.textContent=addingUser?'＋ Add user':'＋ Add task';
+  topAddBtn.onclick=addingUser?openUserModal:openNewTask;
+  topAddBtn.classList.toggle('hidden',!state.appReady||(!canEdit()&&!addingUser));
+  const refreshButton=document.getElementById('topRefreshBtn');
+  refreshButton.classList.toggle('hidden',!state.appReady);
+  refreshButton.disabled=!!state.refreshing;
+  refreshButton.setAttribute('aria-busy',state.refreshing?'true':'false');
+  refreshButton.title=state.refreshing?'Refreshing dashboard data…':'Refresh dashboard data';
+  refreshButton.querySelector('.refresh-label').textContent=state.refreshing?'Refreshing…':'Refresh';
+  refreshButton.classList.toggle('is-refreshing',!!state.refreshing);
+
+  if(!state.appReady){
+    document.getElementById('mainNav').innerHTML='';
+    document.getElementById('adminNav').innerHTML='';
+    document.getElementById('bottomNav').innerHTML='';
+    return;
+  }
+
+  const nav=[
+    ['summary','⌂','Overview'],
+    ['tasks','☷','Tasks'],
+    ['weekly','▣','Weekly Plan']
+  ];
+  document.getElementById('mainNav').innerHTML=nav
+    .map(([key,ico,label])=>`<button class="nav-item ${state.view===key?'active':''}" onclick="goView('${key}')"><span class="nav-ico">${ico}</span>${label}</button>`)
+    .join('');
+
+  document.getElementById('adminNav').innerHTML=canAdmin()
+    ? `<div class="side-label">Admin</div>
+       <button class="nav-item ${state.view==='changelog'?'active':''}" onclick="goView('changelog')"><span class="nav-ico">↻</span>Changelog</button>
+       <button class="nav-item ${state.view==='users'?'active':''}" onclick="goView('users')"><span class="nav-ico">♧</span>Users</button>`
+    : '';
+
+  const bottom=[
+    ['summary','⌂','Overview'],
+    ['tasks','☷','Tasks'],
+    ['weekly','▣','Plan']
+  ];
+  if(canAdmin()){
+    bottom.push(['changelog','↻','Changes']);
+    bottom.push(['users','♧','Users']);
+  }
+
+  document.getElementById('bottomNav').innerHTML=bottom
+    .map(([key,ico,label])=>`<button class="${state.view===key?'active':''}" onclick="goView('${key}')"><span>${ico}</span><span>${label}</span></button>`)
+    .join('');
+}
+function goView(v){
+  if((v==='changelog'||v==='users')&&!canAdmin())v='summary';
+  state.view=v;
+  renderChrome();
+  render();
+  toggleMobileSidebar(false);
+}
+function mobileNav(v){if(v==='more'){toggleMobileSidebar(true);return;}goView(v)}
+function filterProduct(p){state.filters.product=p;state.overviewProduct=p;state.weeklyFilters.product=p;state.view='tasks';renderChrome();render();toggleMobileSidebar(false)}
+function toggleMobileSidebar(open){document.getElementById('sidebar').classList.toggle('open',!!open);document.getElementById('mobileSideBackdrop').classList.toggle('open',!!open)}
+function handleGlobalSearch(v){state.filters.search=v;syncSearchInputs(v);if(state.view!=='tasks'){state.view='tasks';renderChrome();renderTasks();return;}queueTaskResultsRender();}
+function render(){
+  if(state.view==='summary')renderSummary();
+  else if(state.view==='tasks')renderTasks();
+  else if(state.view==='weekly')renderWeekly();
+  else if(state.view==='changelog'){if(canAdmin())renderChangelog();else goView('summary');}
+  else if(state.view==='users'){if(canAdmin())renderUsers();else goView('summary');}
+}
+function pageHead(title,sub,actions=''){return `<div class="page-head"><div><h1>${title}</h1><p>${sub}</p></div>${actions?`<div class="page-actions">${actions}</div>`:''}</div>`;}
+function weekNavHtml(){return `<div class="week-nav"><button class="btn icon" onclick="changeWeek(-1)">‹</button><div class="week-label">${state.loadingWeek?'Loading…':esc(fmtWeek(state.week))}</div><button class="btn icon" onclick="changeWeek(1)">›</button></div>`;}
+function metric(label,value,note,icon,cls=''){return `<div class="metric"><div class="metric-top"><div class="metric-label ${cls}">${label}</div><div class="metric-icon">${icon}</div></div><div class="metric-value">${value}</div><div class="metric-note">${note||''}</div></div>`;}
+function weeklyIsDone(w){
+  if(!w)return false;
+  const weeklyDone=groupStatus({status:w.weeklyStatus||''})==='Done';
+  const live=(state.tasks||[]).find(t=>String(t.taskId||'').toLowerCase()===String(w.taskId||'').toLowerCase());
+  const registerDone=live
+    ? groupStatus(live)==='Done'
+    : groupStatus({
+        status:w.registerStatus||'',
+        statusGroup:w.registerStatusGroup||''
+      })==='Done';
+  return weeklyDone||registerDone;
+}
+function activeWeeklyPlan(){return (state.weeklyPlan||[]).filter(w=>!weeklyIsDone(w));}
+
+function ownerCapacity(owner){
+  const c=state.capacity||{};
+  const owners=c.owners||{};
+  return owners[owner]||{
+    owner:owner,
+    availableHours:Number(c.defaultHours||40),
+    note:'',
+    isOverride:false
+  };
+}
+function taskUsesEstimatedHours(task){
+  const group=groupStatus(task||{});
+  return group!=='QA'&&group!=='Done';
+}
+function weeklyUsesEstimatedHours(w){
+  if(!w)return false;
+  const live=(state.tasks||[]).find(
+    t=>String(t.taskId||'').toLowerCase()===String(w.taskId||'').toLowerCase()
+  );
+  if(live)return taskUsesEstimatedHours(live);
+  return taskUsesEstimatedHours({
+    status:w.registerStatus||w.weeklyStatus||'',
+    statusGroup:w.registerStatusGroup||''
+  });
+}
+function weeklyHours(w){
+  if(!weeklyUsesEstimatedHours(w))return 0;
+  const n=Number(w&&w.estimatedHours);
+  return Number.isFinite(n)&&n>0?n:0;
+}
+function weeklyCapacitySummary(plan){
+  const active=(plan||[]).filter(w=>!weeklyIsDone(w));
+  const owners=uniq(active.map(w=>w.owner||'Unassigned'));
+  const plannedHours=active.reduce((sum,w)=>sum+weeklyHours(w),0);
+  const availableHours=owners.reduce((sum,owner)=>sum+Number(ownerCapacity(owner).availableHours||0),0);
+  const missingEstimates=active.filter(
+    w=>weeklyUsesEstimatedHours(w)&&weeklyHours(w)<=0
+  ).length;
+  return{
+    active,owners,plannedHours,availableHours,
+    remainingHours:availableHours-plannedHours,
+    missingEstimates
+  };
+}
+function hoursText(n){return `${Math.round((Number(n)||0)*4)/4}h`;}
+function utilizationPct(planned,available){
+  if(!Number(available))return 0;
+  return Math.round(Number(planned||0)/Number(available)*100);
+}
+
+function isTaskDone(t){return groupStatus(t)==='Done';}
+function plannedMap(){const m=new Map();(state.weeklyPlan||[]).forEach(x=>m.set(String(x.taskId).toLowerCase(),x));return m;}
+</script>

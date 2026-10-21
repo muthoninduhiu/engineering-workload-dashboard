@@ -1,0 +1,550 @@
+<script>
+
+function setOverviewMode(mode){
+
+  state.overviewMode=mode==='team'?'team':'portfolio';
+
+  renderSummary();
+
+}
+
+
+
+function setOverviewProduct(product){
+
+  state.overviewProduct=product||'';
+
+  state.filters.product=state.overviewProduct;
+
+  state.weeklyFilters.product=state.overviewProduct;
+
+  renderSummary();
+
+}
+
+
+function normalizeOwnerName_(owner) {
+  const value = String(owner || '').trim();
+
+  const aliases = {
+    'pt': 'PT',
+    'pthapli@nostacklabs.com': 'PT',
+    'pratyush thapliyal': 'PT',
+
+    'ambrose': 'Ambrose',
+    'ambrose.ahawo@mediapal.net': 'Ambrose',
+
+    'rohit': 'Rohit',
+    'rohit tatu': 'Rohit',
+    'rtatu@nostacklabs.com': 'Rohit',
+    'rtatu@weplayarcade.com': 'Rohit',
+
+    'james': 'James',
+    'james.odera@mediapal.net': 'James',
+
+    'antony': 'Antony',
+    'anthony': 'Antony',
+    'tulla': 'Antony',
+    'tula': 'Antony',
+    'antony tulla': 'Antony',
+    'anthony tulla': 'Antony',
+    'anthony.tulla@mediapal.net': 'Antony',
+
+    'abhishek': 'Abhishek',
+    'abhishek.verma@mediapal.net': 'Abhishek',
+
+    'maryanne': 'Maryanne',
+    'maryanne.nduhiu@mediapal.net': 'Maryanne',
+
+    'yash': 'Yash',
+    'yash@weplayarcade.com': 'Yash'
+  };
+
+  return aliases[value.toLowerCase()] || value || 'Unassigned';
+}
+
+function renderSummary(){
+
+  const allTasks=state.tasks||[];
+
+  const allWeeklyPlan=activeWeeklyPlan();
+
+  const product=state.overviewProduct||'';
+
+  const tasks=allTasks.filter(t=>!product||t.product===product);
+
+  const activeWeek=allWeeklyPlan.filter(w=>!product||w.product===product);
+
+  const counts={Backlog:0,Todo:0,'In Progress':0,QA:0,Blocked:0,Done:0};
+
+
+
+  tasks.forEach(task=>{
+
+    const status=groupStatus(task);
+
+    counts[status]=(counts[status]||0)+1;
+
+  });
+
+
+
+  const developmentGroups=new Set(['Backlog','Todo']);
+
+  const developmentTasks=tasks.filter(task=>developmentGroups.has(groupStatus(task)));
+
+  const developmentBacklog=developmentTasks.length;
+
+  const workflowTotal=Object.values(counts).reduce((sum,count)=>sum+count,0);
+
+  const maxStatus=Math.max(1,...Object.values(counts));
+
+  const productOrder=['ShowApp','MediaPal','WePlay','Klima','Nano','Governance'];
+  const productCounts=new Map();
+  const ownerCounts=new Map();
+  developmentTasks.forEach(task=>{
+    const name=String(task.product||'').trim()||'Unspecified product';
+    productCounts.set(name,(productCounts.get(name)||0)+1);
+    const owner=String(task.owner||'').trim()||'Unassigned';
+    ownerCounts.set(owner,(ownerCounts.get(owner)||0)+1);
+  });
+  const products=[...productCounts.entries()].sort((a,b)=>{
+    const ai=productOrder.indexOf(a[0]),bi=productOrder.indexOf(b[0]);
+    return (ai<0?999:ai)-(bi<0?999:bi)||a[0].localeCompare(b[0]);
+  });
+  const breakdown=product
+    ?[...ownerCounts.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0]))
+    :products;
+  const maxBreakdown=Math.max(1,...breakdown.map(item=>item[1]));
+
+  const ownerTasks={};
+
+  activeWeek.forEach(item=>{
+
+    const owner=normalizeOwnerName_(item.owner);
+
+    if(!ownerTasks[owner])ownerTasks[owner]={tasks:0,hours:0};
+
+    ownerTasks[owner].tasks+=1;
+
+    ownerTasks[owner].hours+=weeklyHours(item);
+
+  });
+
+  const ownerRows=Object.entries(ownerTasks)
+
+    .sort((a,b)=>b[1].hours-a[1].hours||b[1].tasks-a[1].tasks);
+
+  const weekCapacity=weeklyCapacitySummary(activeWeek);
+
+  const totalTasks=ownerRows.reduce((sum,row)=>sum+row[1].tasks,0);
+
+  const totalHours=ownerRows.reduce((sum,row)=>sum+row[1].hours,0);
+
+  const assignedOwners=ownerRows.filter(([owner])=>owner!=='Unassigned').length;
+
+  const totalCapacity=ownerRows.reduce((sum,row)=>row[0]==='Unassigned'
+
+    ?sum
+
+    :sum+Number(ownerCapacity(row[0]).availableHours||0),0);
+
+  const utilization=totalCapacity>0?utilizationPct(totalHours,totalCapacity):null;
+
+  const missingEstimates=weekCapacity.missingEstimates;
+
+
+
+  const weekStart=state.week&&state.week.start;
+
+  const weekEnd=state.week&&state.week.end;
+
+  const dueThisWeek=tasks.filter(task=>
+
+    !task.closed&&task.dueDate&&weekStart&&weekEnd&&
+
+    task.dueDate>=weekStart&&task.dueDate<=weekEnd
+
+  ).length;
+
+  const productsForFilter=uniq(allTasks.map(task=>task.product));
+
+  const subtitle=product
+
+    ?`Portfolio health and execution for ${displayProduct(product)}.`
+
+    :state.access&&state.access.allProducts
+
+      ?'Portfolio health and team execution across all products.'
+
+      :`Overview for ${((state.access&&state.access.products)||[]).map(displayProduct).join(', ')||'your assigned products'}.`;
+
+  const isTeam=state.overviewMode==='team';
+
+
+
+  document.getElementById('main').innerHTML=
+
+    pageHead('Overview',subtitle,weekNavHtml())+
+
+   
+`<div class="overview-toolbar">
+  <div class="overview-tabs" role="tablist" aria-label="Overview sections">
+    <button type="button"
+      class="overview-tab ${isTeam?'':'active'}"
+      aria-selected="${!isTeam}"
+      onclick="setOverviewMode('portfolio')">
+      Portfolio Health
+    </button>
+    <button type="button"
+      class="overview-tab ${isTeam?'active':''}"
+      aria-selected="${isTeam}"
+      onclick="setOverviewMode('team')">
+      Team Execution
+    </button>
+  </div>
+
+  <label class="overview-product-filter">
+    <span>Product</span>
+    <select class="control" onchange="setOverviewProduct(this.value)">
+      <option value="">All products</option>
+      ${productsForFilter.map(name=>`
+        <option value="${esc(name)}" ${product===name?'selected':''}>
+          ${esc(displayProduct(name))}
+        </option>
+      `).join('')}
+    </select>
+  </label>
+</div>`+
+
+
+    (isTeam
+
+      ?renderTeamExecution_({
+
+          activeWeek,ownerRows,weekCapacity,totalTasks,totalHours,totalCapacity,
+
+          assignedOwners,utilization,missingEstimates,product
+
+        })
+
+      :renderPortfolioHealth_({
+
+          tasks,counts,developmentTasks,developmentBacklog,workflowTotal,
+
+          maxStatus,breakdown,maxBreakdown,
+
+          dueThisWeek,product
+
+        }));
+
+}
+
+
+
+function overviewExceptionRow_(label,count,description,icon){
+  return `<button class="overview-exception-row" onclick="goView('tasks')" title="Open Tasks to investigate">
+    <span class="overview-exception-label"><span class="overview-exception-dot"></span><span><b>${esc(label)}</b><small>${esc(description)}</small></span></span>
+    <span class="overview-exception-count">${count}</span><span class="overview-exception-arrow">→</span>
+  </button>`;
+}
+
+function openExecutionProduct_(product,stage){
+  state.filters=state.filters||{};
+  state.filters.product=product;
+  // Keep stage navigation safe across app versions: the product filter is guaranteed;
+  // only set the workflow filter when the Tasks view supports that grouping.
+  if(stage&&typeof groupStatus==='function'){
+    state.filters.status=stage==='QA'?'QA':stage;
+  }else{
+    state.filters.status='';
+  }
+  goView('tasks');
+}
+
+function productExecutionChart_(tasks,selectedProduct){
+  const stages=[
+    {key:'Backlog',label:'Backlog',color:'#94a3b8'},
+    {key:'Todo',label:'Todo',color:'#60a5fa'},
+    {key:'In Progress',label:'In Progress',color:'#6257d9'},
+    {key:'QA',label:'QA / Review',color:'#a78bfa'},
+    {key:'Done',label:'Done',color:'#22a079'}
+  ];
+  const grouped=new Map();
+  (tasks||[]).forEach(task=>{
+    const product=String(task.product||'').trim()||'Unspecified product';
+    if(!grouped.has(product))grouped.set(product,{name:product,total:0,counts:{}});
+    const item=grouped.get(product);
+    const status=groupStatus(task);
+    item.total++;
+    item.counts[status]=(item.counts[status]||0)+1;
+  });
+  const rows=[...grouped.values()].sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name));
+  const maxTotal=Math.max(1,...rows.map(row=>row.total));
+  const legend=stages.map(stage=>`<span class="execution-legend-item"><i style="background:${stage.color}"></i>${esc(stage.label)}</span>`).join('');
+  const content=rows.map(row=>{
+    const segments=stages.map(stage=>{
+      const count=row.counts[stage.key]||0;
+      if(!count)return '';
+      const pct=count/row.total*100;
+      return `<button type="button" class="execution-segment" style="width:${pct}%;background:${stage.color}" title="${esc(row.name)} · ${esc(stage.label)}: ${count} tasks (${Math.round(pct)}%)" aria-label="${esc(row.name)} ${esc(stage.label)} ${count} tasks" onclick="openExecutionProduct_('${esc(row.name)}','${esc(stage.key)}')"></button>`;
+    }).join('');
+    return `<div class="execution-row"><button type="button" class="execution-product" onclick="openExecutionProduct_('${esc(row.name)}','')">${esc(displayProduct(row.name))}</button><div class="execution-bar-outer"><div class="execution-bar" style="width:${row.total/maxTotal*100}%">${segments}</div></div><strong class="execution-total">${row.total}</strong></div>`;
+  }).join('');
+  return `<section class="panel execution-panel"><div class="panel-head"><div><div class="panel-title">Product execution</div><div class="panel-sub">${selectedProduct?'Workflow stages for '+esc(displayProduct(selectedProduct)):'Workload and progress across products'} · ${tasks.length} tasks</div></div></div><div class="panel-body"><div class="execution-legend">${legend}</div>${rows.length?`<div class="execution-rows">${content}</div>`:'<div class="overview-empty-state">No tasks in this product scope.</div>'}<div class="execution-note">Bar length shows total tasks; each color shows a workflow stage. Select a segment to view its tasks.</div></div></section>`;
+}
+
+function renderPortfolioHealth_(data){
+
+  const {
+
+    tasks,counts,developmentTasks,developmentBacklog,workflowTotal,maxStatus,
+
+    breakdown,maxBreakdown,dueThisWeek,product
+
+  }=data;
+
+  const openTasks=tasks.filter(task=>groupStatus(task)!=='Done');
+  const missingOwners=openTasks.filter(task=>{
+    const owner=String(task.owner||'').trim().toLowerCase();
+    return !owner||['unassigned','unclaimed','unknown','not assigned'].includes(owner);
+  });
+  const overdueTasks=openTasks.filter(task=>{
+    if(!task.dueDate)return false;
+    const d=new Date(task.dueDate);
+    const today=new Date();today.setHours(0,0,0,0);
+    return !Number.isNaN(d.getTime())&&d<today;
+  });
+  const missingPriority=openTasks.filter(task=>{
+    const p=String(task.priority||'').trim().toLowerCase();
+    return !p||['none','no priority','n/a','not set','unset'].includes(p);
+  });
+
+  const due=tasks
+
+    .filter(task=>!task.closed&&task.dueDate)
+
+    .sort((a,b)=>String(a.dueDate).localeCompare(String(b.dueDate)))
+
+    .slice(0,5);
+
+  const workflow=[
+
+    ['Todo','#60a5fa'],
+
+    ['Backlog','#94a3b8'],
+
+    ['In Progress','var(--brand)'],
+
+    ['QA','var(--violet)'],
+
+    
+
+    ['Done','var(--green)']
+
+  ];
+
+
+
+  return `<div class="summary-kpis overview-kpis">
+
+      ${metric('Development backlog',developmentBacklog,'Backlog + Todo','▦')}
+
+      ${metric('In progress',counts['In Progress'],'Active development','▶')}
+
+      ${metric('QA / Review',counts.QA,'In the QA closure pipeline','◎')}
+
+      ${metric('Done',counts.Done,'Completed or closed tasks','✓')}
+
+      ${metric('Due this week',dueThisWeek,'Open tasks due this week','◷')}
+
+    </div>
+
+    <div class="summary-primary">
+
+      <section class="panel">
+
+        <div class="panel-head">
+
+          <div>
+
+            <div class="panel-title">Workflow distribution</div>
+
+            <div class="panel-sub">${workflowTotal} tracked tasks${product?' for '+esc(displayProduct(product)):' across the selected product scope'}</div>
+
+          </div>
+
+          <button class="btn sm ghost" style="margin-left:auto" onclick="goView('tasks')">View tasks →</button>
+
+        </div>
+
+        <div class="panel-body">
+
+          <div class="product-bars">
+
+            ${workflow.map(([name,color])=>`
+
+              <div class="bar-row" style="grid-template-columns:100px minmax(0,1fr) 38px">
+
+                <span>${name==='QA'?'QA / Review':name}</span>
+
+                <div class="bar-track"><div class="bar-fill" style="width:${Math.round((counts[name]||0)/maxStatus*100)}%;background:${color}"></div></div>
+
+                <b>${counts[name]||0}</b>
+
+              </div>`).join('')}
+
+          </div>
+
+          
+
+        </div>
+
+      </section>
+
+      <section class="panel overview-attention">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Attention needed</div>
+            <div class="panel-sub">Exceptions worth reviewing · ${product?esc(displayProduct(product)):'All products'}</div>
+          </div>
+        </div>
+        <div class="panel-body overview-attention-body">
+          ${overviewExceptionRow_('Missing owner', missingOwners.length, 'Tasks with no owner assigned', 'user-round-x')}
+          ${overviewExceptionRow_('Overdue', overdueTasks.length, 'Open tasks past their due date', 'calendar-clock')}
+          ${overviewExceptionRow_('Missing priority', missingPriority.length, 'Active tasks without a priority', 'flag')}
+          ${!missingOwners.length&&!overdueTasks.length&&!missingPriority.length?'<div class="overview-exception-ok">No ownership, overdue or priority exceptions found.</div>':''}
+          <div class="overview-attention-note">“Not Required” is a valid source value, not an unassigned engineer.</div>
+        </div>
+      </section>
+    </div>
+
+    ${productExecutionChart_(tasks,product)}
+
+    ${due.length?`<section class="due-compact panel">
+
+      <div class="panel-head"><div><div class="panel-title">Upcoming due dates</div><div class="panel-sub">Next open tasks with a due date</div></div></div>
+
+      <div class="panel-body" style="padding:0"><table class="mini-table"><tbody>
+
+        ${due.map(task=>`<tr>
+
+          <td><button class="task-link" onclick="openTask('${esc(task.taskId)}')">${esc(task.taskId)} · ${esc(task.title)}</button></td>
+
+          <td>${productBadge(task.product)}</td><td>${fmtDate(task.dueDate)}</td>
+
+        </tr>`).join('')}
+
+      </tbody></table></div>
+
+    </section>`:''}`;
+
+}
+
+
+
+function renderTeamExecution_(data){
+
+  const {
+
+    activeWeek,ownerRows,weekCapacity,totalTasks,totalHours,totalCapacity,
+
+    assignedOwners,utilization,missingEstimates,product
+
+  }=data;
+
+  return `<div class="summary-kpis overview-kpis team">
+
+      ${metric('Planned tasks',totalTasks,`${assignedOwners} assigned owners`,'▣')}
+
+      ${metric('Planned hours',hoursText(totalHours),'Manually estimated development work','◷')}
+
+      ${metric('Capacity utilization',utilization===null?'—':`${utilization}%`,utilization===null?'No capacity configured':`${hoursText(totalHours)} planned of ${hoursText(totalCapacity)}`,'◒')}
+
+      ${metric('Unestimated tasks',missingEstimates,missingEstimates?'Planned development work needs estimates':'All planned development work is estimated','!')}
+
+    </div>
+
+    <section class="summary-full panel">
+
+      <div class="panel-head">
+
+        <div>
+
+          <div class="panel-title">Team workload</div>
+
+          <div class="panel-sub">${esc(fmtWeek(state.week))} · ${totalTasks} active planned task${totalTasks===1?'':'s'}${product?' · '+esc(displayProduct(product)):''}</div>
+
+        </div>
+
+        <button class="btn sm ghost" style="margin-left:auto" onclick="goView('weekly')">Open weekly plan →</button>
+
+      </div>
+
+      <div class="panel-body" style="padding:0">
+
+        ${ownerRows.length?`<div class="capacity-summary-wrap">
+
+          <table class="mini-table capacity-summary-table overview-team-table">
+
+            <thead><tr><th>Owner</th><th>Tasks</th><th>Planned hours</th><th>Capacity</th><th>Utilization</th></tr></thead>
+
+            <tbody>${ownerRows.map(([owner,values])=>{
+
+              const capacity=owner==='Unassigned'?null:ownerCapacity(owner);
+
+           
+
+              const percent=capacity?utilizationPct(values.hours,capacity.availableHours):null;
+              const ownerMissing=activeWeek.filter(w=>normalizeOwnerName_(w.owner)===owner&& weeklyUsesEstimatedHours(w) &&  weeklyHours(w)<=0).length;
+
+              return `<tr>
+
+                <td><b>${esc(owner)}</b></td><td>${values.tasks}</td><td><b>${hoursText(values.hours)}</b></td>
+
+                <td>${capacity?`${hoursText(capacity.availableHours)}${capacity.isOverride?'<span class="badge blue capacity-override-badge">Override</span>':''}`:'—'}</td>
+
+                
+
+                <td>
+                  ${percent===null
+                    ? '<span class="subline">Assign an owner</span>'
+                    : `<div class="utilization-cell">
+                        <span>${percent}%${percent>100?' ⚠':''}</span>
+                        <div class="coverage-track">
+                          <i class="${percent>100?'over':''}"
+                              style="width:${Math.max(0,Math.min(percent,100))}%"></i>
+                        </div>
+                        ${ownerMissing
+                          ? `<small class="subline">${ownerMissing} unestimated</small>`
+                          : ''}
+                      </div>`
+                  }
+                </td>
+
+              </tr>`;
+
+            }).join('')}</tbody>
+
+           
+          </table>
+
+        </div>`:`<div class="overview-empty-state">
+
+          <b>No tasks planned for this week yet</b>
+
+          <span>Add tasks to the weekly plan to see assignments and capacity here.</span>
+
+          <button class="btn primary sm" onclick="goView('weekly')">Open weekly plan</button>
+
+        </div>`}
+
+      
+
+      </div>
+
+    </section>`;
+
+}
+
+</script>

@@ -1,0 +1,648 @@
+<script>
+function filteredTasks(){
+  const f=state.filters,plan=plannedMap();return (state.tasks||[]).filter(t=>{
+    if(f.product&&t.product!==f.product)return false;
+    if(f.owner&&t.owner!==f.owner)return false;
+    if(f.priority&&String(t.normalizedPriority||t.priority)!==f.priority)return false;
+    if(f.status&&groupStatus(t)!==f.status)return false;
+    if(f.weekOnly&&!plan.has(String(t.taskId).toLowerCase()))return false;
+    if(!taskMatchesSearch(t,f.search))return false;
+    return true;
+  });
+}
+function taskOwnerOptions(currentOwner) {
+  const names = [
+    'Abhishek', 'Ambrose', 'Antony', 'James',
+    'Maryanne', 'PT', 'Rohit', 'Tulla', 'Yash'
+  ];
+
+  const current = String(currentOwner || '').trim();
+
+  // Preserve existing source values until reassigned.
+  if (current && !names.includes(current)) {
+    names.push(current);
+  }
+
+  return names.map(name =>
+    `<option value="${esc(name)}" ${current === name ? 'selected' : ''}>${esc(name)}</option>`
+  ).join('');
+}
+function renderTasks(){
+  const owners=uniq(state.tasks.map(t=>t.owner));const products=uniq(state.tasks.map(t=>t.product));const filters=`<div class="toolbar"><div class="view-toggle"><button class="${state.taskMode==='board'?'active':''}" onclick="setTaskMode('board')">▦ Board</button><button class="${state.taskMode==='table'?'active':''}" onclick="setTaskMode('table')">▤ Table</button></div><input id="taskSearchInput" class="control search" placeholder="Search ID, task, owner, product, status, source..." value="${esc(state.filters.search)}" oninput="handleTaskSearch(this.value)"><select class="control" onchange="setFilter('product',this.value)"><option value="">All products</option>${products.map(p=>`<option value="${esc(p)}" ${state.filters.product===p?'selected':''}>${esc(displayProduct(p))}</option>`).join('')}</select><select class="control" onchange="setFilter('owner',this.value)"><option value="">All owners</option>${owners.map(o=>`<option ${state.filters.owner===o?'selected':''}>${esc(o)}</option>`).join('')}</select><select class="control" onchange="setFilter('priority',this.value)"><option value="">All priorities</option>${PRIORITIES.map(p=>`<option ${state.filters.priority===p?'selected':''}>${p}</option>`).join('')}</select><select class="control" onchange="setFilter('status',this.value)"><option value="">All statuses</option>${STATUS_COLUMNS.map(s=>`<option value="${s.key}" ${state.filters.status===s.key?'selected':''}>${s.label}</option>`).join('')}</select><button class="btn sm ${state.filters.weekOnly?'primary':''}" onclick="toggleWeekFilter()">▣ Selected week</button><button class="btn sm" onclick="clearTaskFilters()">Clear</button></div>`;
+  document.getElementById('main').innerHTML=pageHead('Tasks','Plan, track and manage engineering work across all products.',weekNavHtml())+filters+`<div id="taskResults"></div>`;
+  syncSearchInputs(state.filters.search);renderTaskResults();
+}
+function renderTaskResults(){const el=document.getElementById('taskResults');if(!el)return;el.innerHTML=state.taskMode==='board'?renderBoardHtml():renderTableHtml();}
+function resetTaskPage(){state.taskPage=1;}
+function handleTaskSearch(v){state.filters.search=v;resetTaskPage();syncSearchInputs(v);queueTaskResultsRender();}
+function setTaskMode(m){state.taskMode=m;resetTaskPage();renderTasks()}
+function setFilter(k,v){state.filters[k]=v;resetTaskPage();renderTasks()}
+function toggleWeekFilter(){state.filters.weekOnly=!state.filters.weekOnly;resetTaskPage();renderTasks()}
+function clearTaskFilters(){state.filters={search:'',product:'',owner:'',priority:'',status:'',weekOnly:false};resetTaskPage();syncSearchInputs('');renderTasks()}
+function setTaskPage(page){
+  const total=filteredTasks().length;
+  const pages=Math.max(1,Math.ceil(total/state.taskPageSize));
+  state.taskPage=Math.max(1,Math.min(Number(page)||1,pages));
+  renderTaskResults();
+  const main=document.getElementById('main');
+  if(main)main.scrollIntoView({behavior:'smooth',block:'start'});
+}
+function setTaskPageSize(size){
+  state.taskPageSize=Math.max(10,Number(size)||50);
+  state.taskPage=1;
+  renderTaskResults();
+}
+function taskPaginationHtml(total,start,end,pages){
+  if(total<=0)return '';
+  const current=state.taskPage;
+  const pageButtons=[];
+  const from=Math.max(1,current-2),to=Math.min(pages,current+2);
+  for(let p=from;p<=to;p++){
+    pageButtons.push(`<button class="btn sm ${p===current?'primary':''}" onclick="setTaskPage(${p})">${p}</button>`);
+  }
+  return `<div class="pagination">
+    <div class="pagination-copy">Showing <b>${start+1}–${end}</b> of <b>${total}</b> tasks</div>
+    <div class="pagination-controls">
+      <select class="control pagination-size" onchange="setTaskPageSize(this.value)">
+        ${[25,50,100].map(n=>`<option value="${n}" ${state.taskPageSize===n?'selected':''}>${n} / page</option>`).join('')}
+      </select>
+      <button class="btn sm" ${current<=1?'disabled':''} onclick="setTaskPage(${current-1})">‹ Previous</button>
+      ${pageButtons.join('')}
+      <button class="btn sm" ${current>=pages?'disabled':''} onclick="setTaskPage(${current+1})">Next ›</button>
+    </div>
+  </div>`;
+}
+function renderBoardHtml(){const tasks=filteredTasks(),plan=plannedMap();return `<div class="mobile-status-tabs">${STATUS_COLUMNS.map(s=>`<button class="${state.mobileStatus===s.key?'active':''}" onclick="setMobileStatus('${s.key}')">${s.label} (${tasks.filter(t=>groupStatus(t)===s.key).length})</button>`).join('')}</div><div class="mobile-board">${tasks.filter(t=>groupStatus(t)===state.mobileStatus).map(t=>taskCard(t,plan.get(String(t.taskId).toLowerCase()),true)).join('')||'<div class="empty">No tasks in this status.</div>'}</div><div class="board-wrap"><div class="board">${STATUS_COLUMNS.map(col=>{const list=tasks.filter(t=>groupStatus(t)===col.key);return `<section class="column ${col.css}" data-status="${col.key}" ondragover="boardDragOver(event)" ondragleave="boardDragLeave(event)" ondrop="boardDrop(event,'${col.key}')"><div class="column-head"><span class="column-title ${col.titleCss}">${col.label}</span><span class="count">${list.length}</span><span class="column-more">•••</span></div><div class="column-cards">${list.map(t=>taskCard(t,plan.get(String(t.taskId).toLowerCase()),false)).join('')}</div>${canEdit()?`<button class="column-add" onclick="openNewTask('${col.key}')">＋ Add task</button>`:''}</section>`}).join('')}</div></div>`;}
+function setMobileStatus(s){state.mobileStatus=s;renderTasks()}
+function taskCard(t,w,mobile){const pending=!!t.pendingSync&&!t.sourceBacked;return `<article class="task-card" ${canEdit()&&!mobile&&!pending?`draggable="true" ondragstart="boardDragStart(event,'${esc(t.taskId)}')" ondragend="boardDragEnd(event)"`:''} onclick="openTask('${esc(t.taskId)}')"><div class="task-id">${esc(t.taskId)}${pending?' <span class="badge orange">Syncing</span>':''}</div><div class="task-title">${esc(t.title||'(Untitled task)')}</div><div class="task-meta">${productBadge(t.product)}${t.workstream?`<span class="badge gray">${esc(t.workstream)}</span>`:''}${mobile?statusBadge(t.status):''}</div><div class="task-foot"><div class="owner"><span class="avatar">${initials(t.owner)}</span>${esc(t.owner||'Unassigned')}</div><div style="display:flex;gap:6px;align-items:center"><div class="prio">${priorityBadge(t.normalizedPriority||t.priority)}</div></div></div><div class="plan-chip">${isTaskDone(t)?'<span class="badge green">Done</span>':w?commitmentBadge(w.commitmentLevel):canEdit()?(pending?'<span class="badge gray">Syncing…</span>':`<button class="btn sm" onclick="event.stopPropagation();openPlanTask('${esc(t.taskId)}')">Plan</button>`):''}</div></article>`;}
+let draggingTaskId='';function boardDragStart(e,id){draggingTaskId=id;e.currentTarget.classList.add('dragging');e.dataTransfer.effectAllowed='move'}function boardDragEnd(e){e.currentTarget.classList.remove('dragging');document.querySelectorAll('.column').forEach(x=>x.classList.remove('drag-over'))}function boardDragOver(e){if(!canEdit())return;e.preventDefault();e.currentTarget.classList.add('drag-over')}function boardDragLeave(e){e.currentTarget.classList.remove('drag-over')}async function boardDrop(e,status){e.preventDefault();e.currentTarget.classList.remove('drag-over');if(!draggingTaskId)return;const t=state.tasks.find(x=>x.taskId===draggingTaskId);draggingTaskId='';if(!t||groupStatus(t)===status)return;const old=t.status;t.status=status;t.statusGroup=status;renderTasks();try{await server('updateTaskById',t.taskId,'status',status);showToast(`${t.taskId} moved to ${status}`)}catch(err){t.status=old;t.statusGroup=groupStatus({status:old});renderTasks();showError(err)}}
+function renderTableHtml(){
+  const all=filteredTasks();
+  const owners=uniq(state.tasks.map(t=>t.owner));
+  const plan=plannedMap();
+  const pages=Math.max(1,Math.ceil(all.length/state.taskPageSize));
+
+  if(state.taskPage>pages)state.taskPage=pages;
+  if(state.taskPage<1)state.taskPage=1;
+
+  const start=(state.taskPage-1)*state.taskPageSize;
+  const end=Math.min(all.length,start+state.taskPageSize);
+  const tasks=all.slice(start,end);
+
+  const table=`
+    <div class="table-wrap">
+      <table class="task-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Task</th><th>Product</th><th>Owner</th>
+            <th>Priority</th><th>Status</th><th>Due</th><th>Plan</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tasks.map(t=>{
+            const w=plan.get(String(t.taskId).toLowerCase());
+            const pending=!!t.pendingSync&&!t.sourceBacked;
+            return `<tr>
+              <td><span class="badge blue">${esc(t.taskId)}</span>${pending?' <span class="badge orange">Syncing</span>':''}</td>
+              <td><button class="task-link" onclick="openTask('${esc(t.taskId)}')">${esc(t.title)}</button><div class="subline">${esc(t.workstream)} · ${esc(t.sourceSheet)}</div></td>
+              <td>${productBadge(t.product)}</td>
+              <td>
+                ${canEdit()&&!pending
+                  ? `<select class="inline-select"
+                      onchange="inlineUpdate('${esc(t.taskId)}','owner',this.value,this)">
+                      ${taskOwnerOptions(t.owner)}
+                    </select>`
+                  : esc(t.owner||'Unassigned')}
+              </td>
+              <td>${canEdit()&&!pending?`<select class="inline-select" onchange="inlineUpdate('${esc(t.taskId)}','priority',this.value,this)">${PRIORITIES.map(p=>`<option ${String(t.normalizedPriority||t.priority)===p?'selected':''}>${p}</option>`).join('')}</select>`:priorityBadge(t.normalizedPriority||t.priority)}</td>
+              <td>${canEdit()&&!pending?`<select class="inline-select" onchange="inlineUpdate('${esc(t.taskId)}','status',this.value,this)">${statusOptions(t.status)}</select>`:statusBadge(t.status)}</td>
+              <td>${fmtDate(t.dueDate)}</td>
+              <td>${isTaskDone(t)?'<span class="subline">—</span>':w?commitmentBadge(w.commitmentLevel):canEdit()?(pending?'<span class="badge gray">Syncing…</span>':`<button class="btn sm" onclick="openPlanTask('${esc(t.taskId)}')">Plan</button>`):'—'}</td>
+              <td><button class="btn sm ghost" onclick="openTask('${esc(t.taskId)}')">•••</button></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  return table+taskPaginationHtml(all.length,start,end,pages);
+}
+
+function statusOptions(current){return uniq([current,...COMMON_STATUSES]).map(s=>`<option ${s===current?'selected':''}>${esc(s)}</option>`).join('')}
+async function inlineUpdate(taskId,field,value,el){const t=state.tasks.find(x=>x.taskId===taskId);if(!t)return;const old=t[field]??(field==='priority'?t.normalizedPriority:'');if(field==='priority'){t.priority=value;t.normalizedPriority=value}else{t[field]=value;if(field==='status')t.statusGroup=groupStatus({status:value})}try{await server('updateTaskById',taskId,field,value);showToast(`${taskId} updated`)}catch(err){if(field==='priority'){t.priority=old;t.normalizedPriority=old}else t[field]=old;showError(err);renderTasks()}}
+function openPlanTask(taskId,keepDrawerOpen){
+  const t=(state.tasks||[]).find(
+    x=>String(x.taskId).toLowerCase()===String(taskId).toLowerCase()
+  );
+
+  if(!t){
+    showToast('Task was not found','error');
+    return;
+  }
+
+  if(isTaskDone(t)){
+    showToast('Done tasks are not added to the weekly plan.','error');
+    return;
+  }
+
+  if(!Number(t.rowIndex)&&!t.sourceBacked){
+    showToast(
+      'This new task is still syncing to the task register. Try again in a moment.',
+      'error'
+    );
+    reconcileCreatedTask(taskId);
+    return;
+  }
+
+  if(plannedMap().has(String(taskId).toLowerCase())){
+    showToast(`${taskId} is already planned for ${fmtWeek(state.week)}`);
+    return;
+  }
+
+  const needsHours=taskUsesEstimatedHours(t);
+
+  window.__planTaskContext={
+    taskId,
+    keepDrawerOpen:!!keepDrawerOpen,
+    needsHours
+  };
+
+  document.getElementById('taskModalCard').innerHTML=
+    `<div class="modal-head"><h3>Plan ${esc(taskId)}</h3></div>
+     <div class="modal-body">
+       <div class="route-preview" style="margin-bottom:14px">
+         <b>${esc(t.title)}</b><br>
+         <span>${esc(displayProduct(t.product))} · ${esc(t.owner||'Unassigned')} · ${esc(fmtWeek(state.week))}</span>
+       </div>
+
+       <div class="form-grid">
+         <div class="field ${needsHours?'':'full'}">
+           <label>Commitment</label>
+           <select id="plan_commitment">
+             ${COMMITMENTS.map(c=>`<option>${esc(c)}</option>`).join('')}
+           </select>
+         </div>
+
+         ${needsHours?`
+           <div class="field">
+             <label>Estimated hours *</label>
+             <input
+               id="plan_hours"
+               type="number"
+               min="0.25"
+               max="168"
+               step="0.25"
+               placeholder="Enter team estimate"
+             >
+           </div>
+         `:''}
+       </div>
+
+       <div class="capacity-hint">
+         ${needsHours
+           ?'Enter the engineer/team estimate for this task. No automatic estimate is generated.'
+           :'QA / Review tasks do not use estimated hours and do not add to planned-hour utilization.'}
+       </div>
+     </div>
+
+     <div class="modal-foot">
+       <button class="btn" onclick="closeModal('taskModal')">Cancel</button>
+       <button class="btn primary" id="planTaskBtn" onclick="submitPlanTask()">Add to week</button>
+     </div>`;
+
+  document.getElementById('taskModal').classList.add('open');
+
+  if(needsHours){
+    setTimeout(()=>{
+      const h=document.getElementById('plan_hours');
+      if(h)h.focus();
+    },0);
+  }
+}
+
+async function submitPlanTask(){
+  const ctx=window.__planTaskContext||{};
+  const taskId=ctx.taskId;
+
+  const t=(state.tasks||[]).find(
+    x=>String(x.taskId).toLowerCase()===String(taskId||'').toLowerCase()
+  );
+
+  if(!t)return;
+
+  const needsHours=ctx.needsHours!==false&&taskUsesEstimatedHours(t);
+  const hoursEl=document.getElementById('plan_hours');
+  const hours=needsHours?Number(hoursEl&&hoursEl.value):'';
+  const commitment=(document.getElementById('plan_commitment')||{}).value||'Commit';
+
+  if(
+    needsHours &&
+    (!Number.isFinite(hours)||hours<=0||hours>168)
+  ){
+    showToast('Enter the team estimate in hours.','error');
+    return;
+  }
+
+  const btn=document.getElementById('planTaskBtn');
+  if(btn){
+    btn.disabled=true;
+    btn.textContent='Adding…';
+  }
+
+  try{
+    const r=await server(
+      'addTaskIdToWeek',
+      t.taskId,
+      commitment,
+      state.week.start,
+      needsHours?hours:''
+    );
+
+    if(!Number(r.added||r.addedCount||0)){
+      const why=(r.skipped||[]).join(', ');
+      showToast(
+        why?`Nothing added: ${why}`:'Task was not added to the week',
+        'error'
+      );
+      if(btn){
+        btn.disabled=false;
+        btn.textContent='Add to week';
+      }
+      return;
+    }
+
+    closeModal('taskModal');
+    invalidateWeek(state.week.start);
+    delete state.capacityCache[state.week.start];
+    await loadWeek(state.week.start,true);
+
+    showToast(
+      needsHours
+        ?`${taskId} added · ${hours}h`
+        :`${taskId} added`
+    );
+
+    if(ctx.keepDrawerOpen&&state.selectedTask){
+      renderTaskDrawer();
+    }else if(state.view==='tasks'){
+      renderTaskResults();
+    }
+  }catch(err){
+    showError(err);
+    if(btn){
+      btn.disabled=false;
+      btn.textContent='Add to week';
+    }
+  }
+}
+
+
+async function openTask(taskId){
+  const t=state.tasks.find(x=>String(x.taskId)===String(taskId));if(!t)return;
+  state.selectedTask={...t};state.selectedTaskOriginal={...t};renderTaskDrawer();
+  document.getElementById('drawerBackdrop').classList.add('open');document.getElementById('taskDrawer').classList.add('open');
+  try{const live=await server('getTaskById',taskId);if(live&&state.selectedTask&&String(state.selectedTask.taskId)===String(taskId)){state.selectedTask={...live};state.selectedTaskOriginal={...live};const i=state.tasks.findIndex(x=>String(x.taskId).toLowerCase()===String(taskId).toLowerCase());if(i>=0)state.tasks[i]=live;renderTaskDrawer();}}catch(e){console.warn('Source task hydration failed',e)}
+  try{state.taskHistory[String(taskId).toLowerCase()]=await server('getTaskHistory',taskId,300);if(state.selectedTask&&String(state.selectedTask.taskId)===String(taskId))renderTaskDrawer()}catch(e){console.warn('History load failed',e)}
+}
+function closeTaskDrawer(){
+  document.getElementById('drawerBackdrop').classList.remove('open');
+  document.getElementById('taskDrawer').classList.remove('open');
+  state.selectedTask=null;
+  state.selectedTaskOriginal=null;
+  window.__drawerContext=null;
+}
+function technicalMetadataHtml(t){
+  if(!canAdmin())return '';
+
+  const details=
+    Array.isArray(t&&t.sourceDetails)
+      ?t.sourceDetails
+      :[];
+
+  if(!details.length)return '';
+
+  return `<details class="drawer-disclosure">
+    <summary>
+      <span>Technical metadata</span>
+      <span class="subline">${details.length} source field${details.length===1?'':'s'}</span>
+    </summary>
+
+    <div class="drawer-disclosure-body">
+      <div class="technical-meta-note">
+        Kept in the source system for traceability. These fields are hidden from the normal task view because they are not needed for day-to-day planning.
+      </div>
+
+      <div class="source-detail-grid compact-source-grid">
+        ${details.map(item=>`
+          <div class="source-detail-item">
+            <div class="source-detail-label">${esc(item.label)}</div>
+            <div class="source-detail-value">${esc(item.value)}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  </details>`;
+}
+
+function taskActivityHtml(taskId){
+  const rows=
+    state.taskHistory[
+      String(taskId||'').toLowerCase()
+    ] || [];
+
+  if(!rows.length)return '';
+
+  return `<details class="drawer-disclosure">
+    <summary>
+      <span>Activity</span>
+      <span class="subline">${rows.length} change${rows.length===1?'':'s'}</span>
+    </summary>
+
+    <div class="drawer-disclosure-body">
+      <div class="validation-list">
+        ${rows.slice(0,6).map(x=>`
+          <div class="validation-row task-activity-row">
+            <div>
+              <b>${esc(x.userName||x.userEmail||'Unknown')}</b>
+              <span class="activity-separator">·</span>
+              ${esc(x.action)}
+
+              <div class="subline">
+                ${esc(activityTime(x.timestamp))}
+                ${x.field?` · ${esc(x.field)}`:''}
+              </div>
+
+              ${x.oldValue||x.newValue
+                ?`<div class="activity-change-preview">
+                    <span>${esc(activityValuePreview(x.oldValue))}</span>
+                    <span>→</span>
+                    <span>${esc(activityValuePreview(x.newValue))}</span>
+                  </div>`
+                :''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      ${canAdmin()
+        ?`<button
+            class="btn sm ghost"
+            style="margin-top:8px"
+            onclick="state.view='changelog';closeTaskDrawer();renderChrome();renderChangelog()"
+          >
+            View full changelog →
+          </button>`
+        :''}
+    </div>
+  </details>`;
+}
+
+function taskWeekContextHtml(t,w,done){
+  if(!w)return '';
+
+  return `<div class="task-week-context">
+    <div>
+      <div class="task-week-label">This week · ${esc(fmtWeek(state.week))}</div>
+
+      <div class="task-week-badges">
+        ${done?'<span class="badge green">Done</span>':commitmentBadge(w.commitmentLevel)}
+        ${statusBadge(w.weeklyStatus)}
+        ${weeklyUsesEstimatedHours(w)&&weeklyHours(w)>0
+          ?`<span class="badge gray">${hoursText(weeklyHours(w))} estimated</span>`
+          :''}
+      </div>
+    </div>
+
+    <div class="task-week-actions">
+      ${canEdit()&&!done
+        ?`<select
+            class="control compact-control"
+            onchange="updateWeeklyInline(${w.weeklyRow},'commitmentLevel',this.value)"
+          >
+            ${COMMITMENTS.map(c=>`<option ${w.commitmentLevel===c?'selected':''}>${esc(c)}</option>`).join('')}
+          </select>`
+        :''}
+
+      ${canEdit()
+        ?`<button
+            class="btn danger sm"
+            onclick="confirmRemoveWeek(${w.weeklyRow},'${esc(t.taskId)}')"
+          >
+            Remove
+          </button>`
+        :''}
+    </div>
+  </div>`;
+}
+
+
+function renderTaskDrawer(){
+  const t=state.selectedTask;
+  if(!t)return;
+
+  const owners=
+    uniq(
+      state.tasks.map(x=>x.owner)
+    );
+
+  const w=
+    (state.weeklyPlan||[])
+      .find(
+        x=>
+          String(x.taskId).toLowerCase()===
+          String(t.taskId).toLowerCase()
+      );
+
+  const pending=
+    !!t.pendingSync &&
+    !t.sourceBacked;
+
+  const done=
+    isTaskDone(t);
+
+  const ro=
+    (!canEdit()||pending)
+      ?'disabled'
+      :'';
+
+  const validationIssues=
+    ((state.validation&&state.validation.issues)||[])
+      .filter(
+        i=>
+          String(i.taskId||'').toLowerCase()===
+          String(t.taskId||'').toLowerCase()
+      );
+
+  const validationHtml=
+    validationIssues.length
+      ?`<details class="drawer-disclosure">
+          <summary>
+            <span>Data quality</span>
+            <span class="badge ${validationIssues.some(i=>i.severity==='error')?'red':'orange'}">${validationIssues.length}</span>
+          </summary>
+
+          <div class="drawer-disclosure-body">
+            <div class="validation-list">
+              ${validationIssues.map(i=>`
+                <div class="validation-row">
+                  <span class="validation-sev ${i.severity}"></span>
+                  <div>
+                    <div class="validation-msg">${esc(i.message)}</div>
+                    <div class="validation-meta">${esc(i.type)}</div>
+                  </div>
+                  <span class="badge ${i.severity==='error'?'red':'orange'}">${esc(i.severity)}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </details>`
+      :'';
+
+  const planButton=
+    canEdit()&&!done&&!w&&!pending
+      ?`<button
+          class="btn"
+          onclick="openPlanTask('${esc(t.taskId)}',true)"
+        >
+          Plan this week
+        </button>`
+      :'';
+
+  document.getElementById('taskDrawer').innerHTML=
+    `<div class="drawer-head">
+       <div>
+         <div class="task-drawer-head-meta">
+           <div class="drawer-id">${esc(t.taskId)}</div>
+           ${statusBadge(t.status)}
+         </div>
+         <div class="drawer-title">${esc(t.title)}</div>
+       </div>
+
+       <button class="drawer-close" onclick="closeTaskDrawer()">×</button>
+     </div>
+
+     <div class="drawer-body">
+       ${pending
+         ?`<div class="route-preview" style="margin-bottom:12px">
+             <b>Syncing new task…</b><br>
+             <span style="color:#667085">
+               The task is already saved in its source sheet. It will become editable when the source read catches up.
+             </span>
+           </div>`
+         :''}
+
+       ${taskWeekContextHtml(t,w,done)}
+
+       <div class="drawer-section task-core-section">
+         <div class="drawer-section-title">Task details</div>
+
+         <div class="form-grid">
+           <div class="field full">
+             <label>Task title</label>
+             <input id="d_title" value="${esc(t.title)}" ${ro}>
+           </div>
+
+           ${t.description
+             ?`<div class="field full">
+                 <label>Description</label>
+                 <textarea class="task-description" disabled>${esc(t.description)}</textarea>
+               </div>`
+             :''}
+
+           <div class="field">
+             <label>Status</label>
+             <select id="d_status" ${ro}>
+               ${statusOptions(t.status)}
+             </select>
+           </div>
+
+           <div class="field">
+             <label>Owner</label>
+             <select id="d_owner" ${ro}>
+               ${taskOwnerOptions(t.owner)}
+             </select>
+           </div>
+
+           <div class="field">
+             <label>Priority</label>
+             <select id="d_priority" ${ro}>
+               ${PRIORITIES.map(p=>`<option ${String(t.normalizedPriority||t.priority)===p?'selected':''}>${p}</option>`).join('')}
+             </select>
+           </div>
+
+           <div class="field">
+             <label>Due date</label>
+             <input
+               id="d_dueDate"
+               type="date"
+               value="${esc(String(t.dueDate||'').slice(0,10))}"
+               ${ro}
+             >
+           </div>
+
+           <div class="field">
+             <label>Product</label>
+             <input value="${esc(displayProduct(t.product))}" disabled>
+           </div>
+
+           <div class="field">
+             <label>Workstream</label>
+             <input value="${esc(t.workstream||'—')}" disabled>
+           </div>
+
+           <div class="field full">
+             <label>Blocker / dependency</label>
+             <textarea class="task-dependency" id="d_dependency" ${ro}>${esc(t.dependency||'')}</textarea>
+           </div>
+         </div>
+
+         <div class="task-source-line">
+           <span class="task-source-label">Source</span>
+           <div class="task-source-value">
+             <b>${esc(t.sourceSheet||'—')}</b>
+             ${t.sourceWorkbook?`<span>${esc(t.sourceWorkbook)}</span>`:''}
+           </div>
+         </div>
+       </div>
+
+       ${validationHtml}
+       ${taskActivityHtml(t.taskId)}
+       ${technicalMetadataHtml(t)}
+     </div>
+
+     <div class="drawer-foot">
+       ${canAdmin()
+         ?`<button
+             class="btn danger"
+             style="margin-right:auto"
+             onclick="confirmDeleteTask('${esc(t.taskId)}')"
+           >
+             Delete task
+           </button>`
+         :''}
+
+       ${planButton}
+
+       <button class="btn" onclick="closeTaskDrawer()">
+         ${canEdit()?'Cancel':'Close'}
+       </button>
+
+       ${canEdit()&&!pending
+         ?`<button class="btn primary" onclick="saveTaskDrawer()">Save changes</button>`
+         :''}
+     </div>`;
+}
+
+
+function confirmDeleteTask(taskId){showConfirm('Delete task?',`${taskId} will be permanently removed from its source sheet and every weekly plan entry. The deletion remains in the changelog.`,async()=>{try{const r=await server('deleteTask',taskId);const key=String(taskId).toLowerCase();delete state.pendingCreated[key];state.tasks=state.tasks.filter(t=>String(t.taskId).toLowerCase()!==key);state.weeklyPlan=state.weeklyPlan.filter(w=>String(w.taskId).toLowerCase()!==key);state.weekCache={};state.activityLoaded=false;closeTaskDrawer();render();showToast(`${taskId} deleted${r&&r.removedWeeklyRows?` · removed from ${r.removedWeeklyRows} weekly plan entr${r.removedWeeklyRows===1?'y':'ies'}`:''}`)}catch(err){showError(err)}})}
+async function saveTaskDrawer(){
+  const t=state.selectedTask,o=state.selectedTaskOriginal;if(!t||!o)return;
+  const vals={title:document.getElementById('d_title').value.trim(),status:document.getElementById('d_status').value,owner:document.getElementById('d_owner').value,priority:document.getElementById('d_priority').value,dueDate:document.getElementById('d_dueDate').value,dependency:document.getElementById('d_dependency').value.trim()};
+  if(!vals.title){showToast('Task title is required','error');return;}
+  if(vals.dueDate&&!/^\d{4}-\d{2}-\d{2}$/.test(vals.dueDate)){showToast('Due date is invalid','error');return;}
+  const changes=Object.entries(vals).filter(([k,v])=>String(k==='priority'?(o.normalizedPriority||o.priority):(o[k]??''))!==String(v));
+  if(!changes.length){closeTaskDrawer();return;}
+  const saveBtn=document.querySelector('.drawer-foot .primary');if(saveBtn){saveBtn.disabled=true;saveBtn.textContent='Saving…'}
+  try{let latest=null;for(const [k,v] of changes){const r=await server('updateTaskById',o.taskId,k,v);if(r&&r.task)latest=r.task;}if(latest){const i=state.tasks.findIndex(x=>String(x.taskId).toLowerCase()===String(o.taskId).toLowerCase());if(i>=0)state.tasks[i]=latest;}showToast(`${o.taskId} updated`);closeTaskDrawer();await reloadAll();}catch(err){showError(err);if(saveBtn){saveBtn.disabled=false;saveBtn.textContent='Save changes'}}
+}
+</script>
