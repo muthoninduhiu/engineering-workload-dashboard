@@ -16,6 +16,8 @@ function apiCall(request) {
       getTaskById:getTaskById,
       getActivityLog:getActivityLog,
       getTaskHistory:getTaskHistory,
+      getTaskRelations:getTaskRelations,
+      saveTaskRelation:saveTaskRelation,
       getAccessAdminData:getAccessAdminData,
       upsertAccessUser:upsertAccessUser,
       deactivateAccessUser:deactivateAccessUser,

@@ -323,6 +323,7 @@ async function openTask(taskId){
   document.getElementById('drawerBackdrop').classList.add('open');document.getElementById('taskDrawer').classList.add('open');
   try{const live=await server('getTaskById',taskId);if(live&&state.selectedTask&&String(state.selectedTask.taskId)===String(taskId)){state.selectedTask={...live};state.selectedTaskOriginal={...live};const i=state.tasks.findIndex(x=>String(x.taskId).toLowerCase()===String(taskId).toLowerCase());if(i>=0)state.tasks[i]=live;renderTaskDrawer();}}catch(e){console.warn('Source task hydration failed',e)}
   try{state.taskHistory[String(taskId).toLowerCase()]=await server('getTaskHistory',taskId,300);if(state.selectedTask&&String(state.selectedTask.taskId)===String(taskId))renderTaskDrawer()}catch(e){console.warn('History load failed',e)}
+  try{state.taskRelationships[String(taskId).toLowerCase()]=await server('getTaskRelations',taskId);if(state.selectedTask&&String(state.selectedTask.taskId)===String(taskId))renderTaskDrawer()}catch(e){console.warn('Relationship load failed',e)}
 }
 function closeTaskDrawer(){
   document.getElementById('drawerBackdrop').classList.remove('open');
@@ -455,6 +456,14 @@ function taskWeekContextHtml(t,w,done){
   </div>`;
 }
 
+function taskRelationshipHtml(t){
+  const key=String(t.taskId||'').toLowerCase();
+  const links=state.taskRelationships[key]||[];
+  const items=links.map(link=>{const isSource=String(link.taskId).toLowerCase()===key,other=isSource?link.relatedTaskId:link.taskId;let label=link.relationship;if(!isSource&&link.relationship==='Parent')label='Subtask';if(!isSource&&link.relationship==='Subtask')label='Parent';return `<button class="relation-chip" onclick="openTask('${esc(other)}')"><span>${esc(label)}</span>${esc(other)}</button>`;}).join('');
+  return `<div class="drawer-section"><div class="drawer-section-title">Task relationships</div><div class="relation-list">${items||'<span class="subline">No parent, subtasks, or related work yet.</span>'}</div>${canEdit()?`<div class="relation-form"><select id="relationType" class="control compact-control"><option value="Parent">Parent task</option><option value="Subtask">Subtask</option><option value="Related">Related</option></select><input id="relationTaskId" class="control" placeholder="Task ID, e.g. WEP-123"><button class="btn sm" onclick="addTaskRelationship('${esc(t.taskId)}')">Link</button></div>`:''}</div>`;
+}
+async function addTaskRelationship(taskId){const related=(document.getElementById('relationTaskId')||{}).value||'';const type=(document.getElementById('relationType')||{}).value||'';try{const links=await server('saveTaskRelation',taskId,related,type);state.taskRelationships[String(taskId).toLowerCase()]=links||[];renderTaskDrawer();showToast('Task relationship saved');}catch(error){showError(error)}}
+
 
 function renderTaskDrawer(){
   const t=state.selectedTask;
@@ -552,6 +561,8 @@ function renderTaskDrawer(){
          :''}
 
        ${taskWeekContextHtml(t,w,done)}
+
+       ${taskRelationshipHtml(t)}
 
        <div class="drawer-section task-core-section">
          <div class="drawer-section-title">Task details</div>

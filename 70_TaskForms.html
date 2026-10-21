@@ -268,7 +268,7 @@ async function reloadAll(forceSourceRefresh){
       `${state.tasks.length} tasks refreshed`
     );
 
-    prefetchAround(
+    scheduleWeeklyPrefetch(
       state.week.start
     );
     return true;

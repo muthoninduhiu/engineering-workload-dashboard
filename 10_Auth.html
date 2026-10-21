@@ -259,7 +259,7 @@ async function loadAuthenticatedApp(){
       `${state.tasks.length} tasks loaded`
     );
 
-    prefetchAround(
+    scheduleWeeklyPrefetch(
       state.week.start
     );
   }catch(err){

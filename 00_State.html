@@ -15,7 +15,7 @@ const state={
   users:[],auditStatus:null,filters:{search:'',product:'',owner:'',priority:'',status:'',weekOnly:false},weeklyFilters:{product:'',owner:'',status:'',showCompleted:false},
   taskPage:1,taskPageSize:50,weeklyCollapsedOwners:{},validationSetupResults:[],validationSetupOperations:{successful:[],skipped:[],failed:[]},capacity:{owners:{},defaultHours:40},capacityCache:{},
   mobileStatus:'In Progress',selectedTask:null,selectedTaskOriginal:null,loadingWeek:false,usersLoaded:false,auditLoaded:false,
-  pendingCreated:{},bootstrap:null,appReady:false,refreshing:false,sessionToken:localStorage.getItem('ewSessionToken')||'',publicBootstrap:null,activity:[],activityLoaded:false,activityLoading:false,activityPage:1,activityMode:'changes',taskHistory:{},accessRequests:[]
+  pendingCreated:{},bootstrap:null,appReady:false,refreshing:false,sessionToken:localStorage.getItem('ewSessionToken')||'',publicBootstrap:null,activity:[],activityLoaded:false,activityLoading:false,activityPage:1,activityMode:'changes',taskHistory:{},taskRelationships:{},reportPeriod:'month',reportStart:'',reportEnd:'',reportProduct:'',accessRequests:[]
 };
 let taskSearchTimer=null;
 
@@ -161,7 +161,7 @@ function friendlyErrorMessage(err){
   const who=parsed.email&&parsed.email!=='unidentified Google account'?` Signed in as ${parsed.email}.`:'';
   return `Cannot access ${parsed.label}. ${parsed.required} is required.${who}`;
 }
-function showError(err){console.error(err);showToast(friendlyErrorMessage(err),'error');}
+function showError(err){showToast(friendlyErrorMessage(err),'error');}
 function canView(){return !!(state.access&&state.access.canView)}function canEdit(){return !!(state.access&&state.access.canEdit)}function canAdmin(){return !!(state.access&&state.access.canAdmin)}
 
 function normalizeSearchText(v){return String(v??'').toLowerCase().replace(/\s+/g,' ').trim();}

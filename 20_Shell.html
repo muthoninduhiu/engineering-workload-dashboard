@@ -39,7 +39,8 @@ function renderChrome(){
   document.getElementById('adminNav').innerHTML=canAdmin()
     ? `<div class="side-label">Admin</div>
        <button class="nav-item ${state.view==='changelog'?'active':''}" onclick="goView('changelog')"><span class="nav-ico">↻</span>Changelog</button>
-       <button class="nav-item ${state.view==='users'?'active':''}" onclick="goView('users')"><span class="nav-ico">♧</span>Users</button>`
+       <button class="nav-item ${state.view==='users'?'active':''}" onclick="goView('users')"><span class="nav-ico">♧</span>Users</button>
+       <button class="nav-item ${state.view==='reports'?'active':''}" onclick="goView('reports')"><span class="nav-ico">▤</span>Reports</button>`
     : '';
 
   const bottom=[
@@ -57,11 +58,44 @@ function renderChrome(){
     .join('');
 }
 function goView(v){
-  if((v==='changelog'||v==='users')&&!canAdmin())v='summary';
+  if((v==='changelog'||v==='users'||v==='reports')&&!canAdmin())v='summary';
+  if(v==='weekly'){
+    openWeeklyPlan();
+    return;
+  }
   state.view=v;
   renderChrome();
   render();
   toggleMobileSidebar(false);
+}
+async function openWeeklyPlan(){
+  if(!state.appReady)return;
+  const selectedWeek=state.week&&state.week.start;
+  const fallbackWeek=(state.todayWeek&&state.todayWeek.start)||weeklyStartForToday();
+  const weekStart=selectedWeek||fallbackWeek;
+  if(!weekStart){
+    showError(new Error('A weekly planning period could not be selected. Please refresh and try again.'));
+    return;
+  }
+  // Navigation from Overview must work even if the startup payload omitted the weekly data.
+  if(!selectedWeek||!Object.prototype.hasOwnProperty.call(state.weekCache,weekStart)){
+    await loadWeek(weekStart,false);
+  }
+  state.view='weekly';
+  renderChrome();
+  render();
+  toggleMobileSidebar(false);
+}
+function weeklyStartForToday(){
+  const today=new Date();
+  const mondayOffset=(today.getDay()+6)%7;
+  today.setDate(today.getDate()-mondayOffset);
+  return dateKey(today);
+}
+function scheduleWeeklyPrefetch(start){
+  // Prefetch is only a performance enhancement. It must never block startup or navigation.
+  if(!start||typeof prefetchAround!=='function')return;
+  Promise.resolve(prefetchAround(start)).catch(()=>{});
 }
 function mobileNav(v){if(v==='more'){toggleMobileSidebar(true);return;}goView(v)}
 function filterProduct(p){state.filters.product=p;state.overviewProduct=p;state.weeklyFilters.product=p;state.view='tasks';renderChrome();render();toggleMobileSidebar(false)}
@@ -84,6 +118,7 @@ function render(){
   else if(state.view==='weekly')renderWeekly();
   else if(state.view==='changelog'){if(canAdmin())renderChangelog();else goView('summary');}
   else if(state.view==='users'){if(canAdmin())renderUsers();else goView('summary');}
+  else if(state.view==='reports'){if(canAdmin())renderReports();else goView('summary');}
 }
 function pageHead(title,sub,actions=''){return `<div class="page-head"><div><h1>${title}</h1><p>${sub}</p></div>${actions?`<div class="page-actions">${actions}</div>`:''}</div>`;}
 function weekNavHtml(){return `<div class="week-nav"><button class="btn icon" onclick="changeWeek(-1)">‹</button><div class="week-label">${state.loadingWeek?'Loading…':esc(fmtWeek(state.week))}</div><button class="btn icon" onclick="changeWeek(1)">›</button></div>`;}
