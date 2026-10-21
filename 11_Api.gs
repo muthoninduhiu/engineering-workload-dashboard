@@ -7,7 +7,9 @@ function apiCall(request) {
   try {
     const allowed = {
       getBootstrapInfo:getBootstrapInfo,
+      getStartupDashboardData:getStartupDashboardData,
       getDashboardData:getDashboardData,
+      refreshDashboardData:refreshDashboardData,
       getInitialDashboardData:getInitialDashboardData,
       getWeekData:getWeekData,
       getWeekDataBatch:getWeekDataBatch,

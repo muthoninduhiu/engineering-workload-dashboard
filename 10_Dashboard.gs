@@ -97,6 +97,35 @@ function getInitialDashboardData() {
   return getDashboardData(null);
 }
 
+// Keeps app startup to one Apps Script request for authorized users.
+function getStartupDashboardData() {
+  const access = getAccessContext_();
+  const bootstrap = {
+    access: access,
+    deployment: {
+      expectedExecuteAs: 'Me (app owner)',
+      expectedWhoHasAccess: 'Anyone with Google account'
+    },
+    dashboard: {
+      label: CONFIG.DASHBOARD_LABEL,
+      spreadsheetId: getConfiguredDashboardId_()
+    }
+  };
+
+  return {
+    bootstrap: bootstrap,
+    data: access.canView ? getDashboardData(null) : null
+  };
+}
+
+// A user-initiated refresh must bypass the short-lived source-task cache.
+// Normal navigation and reloads remain fast by using the cached catalogue.
+function refreshDashboardData(selectedWeekStart) {
+  requireViewer_();
+  clearSourceTaskCache_();
+  return getDashboardData(selectedWeekStart);
+}
+
 function getWeekDataBatch(selectedWeekStarts) {
   const access = requireViewer_();
   const ss = getDashboardSpreadsheet_();

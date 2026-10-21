@@ -162,8 +162,11 @@ async function loadAuthenticatedApp(){
   try{
     updateAppLoading('Checking your role and product access…');
 
+    const startup=
+      await server('getStartupDashboardData');
+
     const bootstrap=
-      await server('getBootstrapInfo');
+      startup.bootstrap||{};
 
     state.bootstrap=bootstrap||{};
     state.access=
@@ -184,11 +187,7 @@ async function loadAuthenticatedApp(){
       'Reading product task sheets, weekly plan and capacity…'
     );
 
-    const data=
-      await server(
-        'getDashboardData',
-        null
-      );
+    const data=startup.data||{};
 
     updateAppLoading('Preparing Overview, Tasks and Weekly Plan…');
 

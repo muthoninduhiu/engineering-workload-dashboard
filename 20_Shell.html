@@ -68,6 +68,17 @@ function mobileNav(v){if(v==='more'){toggleMobileSidebar(true);return;}goView(v)
 function filterProduct(p){state.filters.product=p;state.overviewProduct=p;state.weeklyFilters.product=p;state.view='tasks';renderChrome();render();toggleMobileSidebar(false)}
 function toggleMobileSidebar(open){document.getElementById('sidebar').classList.toggle('open',!!open);document.getElementById('mobileSideBackdrop').classList.toggle('open',!!open)}
 function handleGlobalSearch(v){state.filters.search=v;syncSearchInputs(v);if(state.view!=='tasks'){state.view='tasks';renderChrome();renderTasks();return;}queueTaskResultsRender();}
+async function refreshCurrentData(){
+  if(state.refreshing||!state.appReady)return;
+  state.refreshing=true;
+  renderChrome();
+  try{
+    await reloadAll(true);
+  }finally{
+    state.refreshing=false;
+    renderChrome();
+  }
+}
 function render(){
   if(state.view==='summary')renderSummary();
   else if(state.view==='tasks')renderTasks();

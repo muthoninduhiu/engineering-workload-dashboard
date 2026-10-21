@@ -203,7 +203,7 @@ function syncNewTaskWeekEligibility(){
 function refreshNewTaskRoute(){const product=document.getElementById('n_product').value,entry=state.routing.find(r=>r.product===product),sheet=document.getElementById('n_sheet');sheet.innerHTML=(entry?entry.workstreams:[]).map(r=>`<option value="${esc(r.sourceSheet)}" data-workstream="${esc(r.label)}">${esc(r.sourceSheet)}${entry.workstreams.length>1?` · ${esc(r.label)}`:''}</option>`).join('');refreshNewTaskRoutePreview()}
 function refreshNewTaskRoutePreview(){const product=document.getElementById('n_product').value,sheet=document.getElementById('n_sheet'),opt=sheet.options[sheet.selectedIndex],work=opt?opt.dataset.workstream:'';document.getElementById('routePreview').innerHTML=`<b>Route:</b> ${esc(displayProduct(product))} → ${esc(sheet.value||'—')}<br><span style="color:#667085">Workstream: ${esc(work||'—')} · Task ID will be generated automatically.</span>`}
 async function createTask(){const sheet=document.getElementById('n_sheet'),opt=sheet.options[sheet.selectedIndex],payload={title:document.getElementById('n_title').value.trim(),product:document.getElementById('n_product').value,sourceSheet:sheet.value,workstream:opt?opt.dataset.workstream:'',owner:document.getElementById('n_owner').value.trim(),status:document.getElementById('n_status').value,priority:document.getElementById('n_priority').value,dueDate:document.getElementById('n_due').value,points:'',dependency:document.getElementById('n_dependency').value.trim(),addToWeek:document.getElementById('n_addWeek').checked,commitmentLevel:document.getElementById('n_commitment').value,estimatedHours:(document.getElementById('n_estimatedHours')||{}).value||'',weekStart:state.week.start};if(!payload.title){showToast('Task name is required','error');return}if(!payload.product||!payload.sourceSheet){showToast('Product and target sheet are required','error');return}if(payload.dueDate&&!/^\d{4}-\d{2}-\d{2}$/.test(payload.dueDate)){showToast('Due date is invalid','error');return}if(payload.addToWeek&&groupStatus({status:payload.status})==='Done'){showToast('Done tasks cannot be added to the weekly plan.','error');return}if(payload.addToWeek&&taskUsesEstimatedHours({status:payload.status})&&(!Number.isFinite(Number(payload.estimatedHours))||Number(payload.estimatedHours)<=0)){showToast('Enter the team estimate in hours before adding this task to the weekly plan.','error');return}if(payload.addToWeek&&!taskUsesEstimatedHours({status:payload.status}))payload.estimatedHours='';const btn=document.getElementById('createTaskBtn');btn.disabled=true;btn.textContent='Creating…';try{const r=await server('createMasterTask',payload);const created=optimisticCreatedTask(r,payload);const key=String(r.taskId).toLowerCase();if(created.pendingSync||!Number(created.rowIndex))state.pendingCreated[key]=created;const existing=state.tasks.findIndex(x=>String(x.taskId||'').toLowerCase()===key);if(existing>=0)state.tasks[existing]=created;else state.tasks.unshift(created);closeTaskDrawer();if(r.addedToWeek){invalidateWeek(state.week.start);await loadWeek(state.week.start,true)}renderChrome();render();showToast(`${r.taskId} created${r.addedToWeek?' and added to the week':''}`);reconcileCreatedTask(r.taskId);}catch(err){showError(err);btn.disabled=false;btn.textContent='Create task'}}
-async function reloadAll(){
+async function reloadAll(forceSourceRefresh){
   setWorkingStatus(
     'Refreshing workspace',
     'Reading source sheets, weekly plan and capacity'
@@ -212,7 +212,9 @@ async function reloadAll(){
   try{
     const data=
       await server(
-        'getDashboardData',
+        forceSourceRefresh
+          ?'refreshDashboardData'
+          :'getDashboardData',
         state.week
           ?state.week.start
           :null
@@ -269,6 +271,7 @@ async function reloadAll(){
     prefetchAround(
       state.week.start
     );
+    return true;
   }catch(err){
     clearWorkingStatus();
 
@@ -282,6 +285,7 @@ async function reloadAll(){
     }else{
       showError(err);
     }
+    return false;
   }
 }
 
