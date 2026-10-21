@@ -6,8 +6,90 @@ function scopeWeeklyForAccess_(rows, access) {
   return (rows || []).filter(function(item) { return canAccessProduct_(access, item.product); });
 }
 
+function getDashboardCacheVersion_() {
+  const properties = PropertiesService.getScriptProperties();
+  let version = clean_(properties.getProperty(CONFIG.DASHBOARD_CACHE_VERSION_PROPERTY_KEY));
+  if (!version) {
+    version = '1';
+    properties.setProperty(CONFIG.DASHBOARD_CACHE_VERSION_PROPERTY_KEY, version);
+  }
+  return version;
+}
+
+function dashboardCacheScope_(access, weekStart) {
+  const products = access && access.allProducts
+    ? 'all'
+    : ((access && access.products) || []).slice().sort().join(',');
+  return [
+    clean_(access && access.email).toLowerCase().replace(/[^a-z0-9]/g, '_'),
+    clean_(access && access.role).toLowerCase(),
+    products.replace(/[^a-zA-Z0-9,]/g, '_'),
+    getWeekFromStart_(weekStart).start
+  ].join('_');
+}
+
+function dashboardCacheKey_(suffix, access, weekStart, version) {
+  return 'EW_DASHBOARD_V1_' + (version || getDashboardCacheVersion_()) + '_' +
+    dashboardCacheScope_(access, weekStart) + '_' + suffix;
+}
+
+function readCachedDashboardData_(access, weekStart) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const manifest = cache.get(dashboardCacheKey_('manifest', access, weekStart));
+    if (!manifest) return null;
+    const parsed = JSON.parse(manifest);
+    const count = Number(parsed.chunks);
+    if (!parsed.complete || !Number.isInteger(count) || count < 1 || count > 20) return null;
+    const chunks = [];
+    for (let index = 0; index < count; index += 1) {
+      const chunk = cache.get(dashboardCacheKey_('chunk_' + index, access, weekStart));
+      if (chunk === null) return null;
+      chunks.push(chunk);
+    }
+    return JSON.parse(chunks.join(''));
+  } catch (error) {
+    return null;
+  }
+}
+
+function cacheDashboardData_(access, weekStart, data) {
+  try {
+    const payload = JSON.stringify(data);
+    const chunkSize = 75000;
+    const chunks = [];
+    for (let offset = 0; offset < payload.length; offset += chunkSize) {
+      chunks.push(payload.slice(offset, offset + chunkSize));
+    }
+    if (!chunks.length || chunks.length > 20) return;
+    const cache = CacheService.getScriptCache();
+    chunks.forEach(function(chunk, index) {
+      cache.put(
+        dashboardCacheKey_('chunk_' + index, access, weekStart),
+        chunk,
+        CONFIG.DASHBOARD_CACHE_SECONDS
+      );
+    });
+    cache.put(
+      dashboardCacheKey_('manifest', access, weekStart),
+      JSON.stringify({chunks: chunks.length, complete: true}),
+      CONFIG.DASHBOARD_CACHE_SECONDS
+    );
+  } catch (error) {
+    console.warn('Could not cache dashboard data.', error);
+  }
+}
+
+function clearDashboardDataCache_() {
+  const properties = PropertiesService.getScriptProperties();
+  const current = Number(getDashboardCacheVersion_()) || 1;
+  properties.setProperty(CONFIG.DASHBOARD_CACHE_VERSION_PROPERTY_KEY, String(current + 1));
+}
+
 function getDashboardData(selectedWeekStart) {
   const access = requireViewer_();
+  const cached = readCachedDashboardData_(access, selectedWeekStart);
+  if (cached) return cached;
   const ss = rememberDashboardSpreadsheet_();
   ensureWeeklySheet_(ss);
 
@@ -72,7 +154,7 @@ function getDashboardData(selectedWeekStart) {
       access
     );
 
-  return {
+  const data = {
     tasks: tasks,
     weeklyPlan: weekWindow[week.start] || [],
     weekWindow: weekWindow,
@@ -91,6 +173,8 @@ function getDashboardData(selectedWeekStart) {
       weekWindow[week.start] || []
     )
   };
+  cacheDashboardData_(access, week.start, data);
+  return data;
 }
 
 function getInitialDashboardData() {

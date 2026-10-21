@@ -192,6 +192,7 @@ function setOwnerCapacity(owner, availableHours, selectedWeekStart, note) {
     newValue: roundedHours,
     details: clean_(note)
   }], actor);
+  clearDashboardDataCache_();
 
   return {
     success: true,
@@ -232,6 +233,7 @@ function resetOwnerCapacity(owner, selectedWeekStart) {
     field: 'Available Hours',
     newValue: CONFIG.DEFAULT_WEEKLY_CAPACITY_HOURS
   }], actor);
+  clearDashboardDataCache_();
 
   return {
     success: true,

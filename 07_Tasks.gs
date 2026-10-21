@@ -1239,6 +1239,7 @@ function clearSourceTaskCache_() {
     String(current)
   );
   properties.setProperty(CONFIG.SOURCE_TASK_CACHE_VERSION_PROPERTY_KEY, String(current + 1));
+  clearDashboardDataCache_();
 }
 
 function getPreviousSourceTaskCacheVersion_() {
@@ -1433,6 +1434,7 @@ function updateTaskFieldsById(taskId, fields) {
 
   const updates = normalizeTaskUpdateFields_(fields);
   updateSourceTaskFieldsById_(task.product, task.sourceSheet, task.taskId, updates);
+  clearDashboardDataCache_();
 
   const activities = Object.keys(updates).map(function(field) {
     return {

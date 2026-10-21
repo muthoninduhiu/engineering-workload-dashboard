@@ -171,6 +171,7 @@ function weeklyPlanCacheKey_(weekStart) {
 
 function clearWeeklyPlanCache_(weekStart) {
   if (!weekStart) return;
+  clearDashboardDataCache_();
 
   try {
     CacheService
@@ -201,6 +202,7 @@ function clearAllWeeklyPlanCache_() {
     CONFIG.WEEK_CACHE_VERSION_PROPERTY_KEY,
     String(current + 1)
   );
+  clearDashboardDataCache_();
 }
 
 function getWeeklyPlanRowsForWeeks_(ss, selectedWeekStarts) {
