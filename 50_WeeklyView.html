@@ -109,7 +109,7 @@ function renderWeekly(){
     pageHead(
       'Weekly Plan',
       'Plan against real weekly availability. Default capacity is 40 hours per owner.',
-      weekNavHtml()
+      `<div class="task-context-actions">${canEdit()?'<button class="btn primary" onclick="openNewTask()">＋ Add task</button>':''}${weekNavHtml()}</div>`
     )+
     `<div class="week-summary-strip capacity-strip">
       <div class="week-stat"><b>${active.length}</b><span>Active tasks</span></div>

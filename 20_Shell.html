@@ -9,12 +9,11 @@ function renderChrome(){
   if(search)search.disabled=!state.appReady;
 
   const topAddBtn=document.getElementById('topAddBtn');
-  const addingUser=state.view==='users'&&canAdmin();
-  topAddBtn.textContent=addingUser?'＋ Add user':'＋ Add task';
-  topAddBtn.onclick=addingUser?openUserModal:openNewTask;
-  topAddBtn.classList.toggle('hidden',!state.appReady||(!canEdit()&&!addingUser));
+  // Creation belongs beside the relevant work surface, not in global chrome.
+  topAddBtn.classList.add('hidden');
   const refreshButton=document.getElementById('topRefreshBtn');
-  refreshButton.classList.toggle('hidden',!state.appReady);
+  const refreshAppliesToCurrentView=['summary','tasks','weekly'].includes(state.view);
+  refreshButton.classList.toggle('hidden',!state.appReady||!refreshAppliesToCurrentView);
   refreshButton.disabled=!!state.refreshing;
   refreshButton.setAttribute('aria-busy',state.refreshing?'true':'false');
   refreshButton.title=state.refreshing?'Refreshing dashboard data…':'Refresh dashboard data';
@@ -73,7 +72,7 @@ async function refreshCurrentData(){
   state.refreshing=true;
   renderChrome();
   try{
-    await reloadAll(true);
+    await reloadAll(false);
   }finally{
     state.refreshing=false;
     renderChrome();

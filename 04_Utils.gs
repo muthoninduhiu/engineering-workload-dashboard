@@ -226,9 +226,19 @@ function normalizeOwner_(value) {
   if (!owner) return 'Unassigned';
 
   const lower = owner.toLowerCase();
-  if (lower.includes('anthony') || lower.includes('tulla')) {
-    return 'Tulla';
-  }
+  const aliases = {
+    'abhishek': 'Abhishek', 'abhishek@nostacklabs.com': 'Abhishek', 'abhishek.verma@mediapal.net': 'Abhishek',
+    'ambrose': 'Ambrose', 'ambrose.ahawo@mediapal.net': 'Ambrose',
+    'antony': 'Antony', 'anthony': 'Antony', 'tulla': 'Antony', 'tula': 'Antony',
+    'antony tulla': 'Antony', 'anthony tulla': 'Antony', 'anthony.tulla@mediapal.net': 'Antony',
+    'james': 'James', 'james.odera@mediapal.net': 'James',
+    'maryanne': 'Maryanne', 'maryanne.nduhiu@mediapal.net': 'Maryanne',
+    'pthapli@nostacklabs.com': 'PT', 'pratyush thapliyal': 'PT', 'pt': 'PT',
+    'rohit': 'Rohit', 'rohit tatu': 'Rohit', 'rtatu@nostacklabs.com': 'Rohit', 'rtatu@weplayarcade.com': 'Rohit',
+    'yash': 'Yash', 'yash@weplayarcade.com': 'Yash'
+  };
+
+  if (aliases[lower]) return aliases[lower];
 
   return owner;
 }

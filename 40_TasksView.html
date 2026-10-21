@@ -2,7 +2,7 @@
 function filteredTasks(){
   const f=state.filters,plan=plannedMap();return (state.tasks||[]).filter(t=>{
     if(f.product&&t.product!==f.product)return false;
-    if(f.owner&&!normalizeSearchText(t.owner).includes(normalizeSearchText(f.owner)))return false;
+    if(f.owner&&!normalizeSearchText(canonicalOwner(t.owner)).includes(normalizeSearchText(f.owner)))return false;
     if(f.priority&&String(t.normalizedPriority||t.priority)!==f.priority)return false;
     if(f.status&&groupStatus(t)!==f.status)return false;
     if(f.weekOnly&&!plan.has(String(t.taskId).toLowerCase()))return false;
@@ -16,7 +16,7 @@ function taskOwnerOptions(currentOwner) {
     'Maryanne', 'PT', 'Rohit', 'Tulla', 'Yash'
   ];
 
-  const current = String(currentOwner || '').trim();
+  const current = canonicalOwner(currentOwner);
 
   // Preserve existing source values until reassigned.
   if (current && !names.includes(current)) {
@@ -29,7 +29,8 @@ function taskOwnerOptions(currentOwner) {
 }
 function renderTasks(){
   const owners=uniq(state.tasks.map(t=>t.owner));const products=uniq(state.tasks.map(t=>t.product));const filters=`<div class="toolbar task-toolbar"><div class="view-toggle"><button class="${state.taskMode==='board'?'active':''}" onclick="setTaskMode('board')">▦ Board</button><button class="${state.taskMode==='table'?'active':''}" onclick="setTaskMode('table')">▤ Table</button></div><input id="taskSearchInput" class="control search" placeholder="Search ID, task, owner, product, status, source..." value="${esc(state.filters.search)}" oninput="handleTaskSearch(this.value)"><select class="control" onchange="setFilter('product',this.value)"><option value="">All products</option>${products.map(p=>`<option value="${esc(p)}" ${state.filters.product===p?'selected':''}>${esc(displayProduct(p))}</option>`).join('')}</select><input id="taskOwnerFilter" class="control owner-filter" list="taskOwnerOptions" placeholder="Filter owners…" value="${esc(state.filters.owner)}" oninput="handleOwnerFilter(this.value)" autocomplete="off"><datalist id="taskOwnerOptions">${owners.map(o=>`<option value="${esc(o)}">`).join('')}</datalist><select class="control" onchange="setFilter('priority',this.value)"><option value="">All priorities</option>${PRIORITIES.map(p=>`<option ${state.filters.priority===p?'selected':''}>${p}</option>`).join('')}</select><select class="control" onchange="setFilter('status',this.value)"><option value="">All statuses</option>${STATUS_COLUMNS.map(s=>`<option value="${s.key}" ${state.filters.status===s.key?'selected':''}>${s.label}</option>`).join('')}</select><button class="btn sm ${state.filters.weekOnly?'primary':''}" onclick="toggleWeekFilter()">▣ Selected week</button><button class="btn sm" onclick="clearTaskFilters()">Clear</button></div>`;
-  document.getElementById('main').innerHTML=pageHead('Tasks','Plan, track and manage engineering work across all products.',weekNavHtml())+filters+`<div id="taskResults"></div>`;
+  const actions=`<div class="task-context-actions">${canEdit()?'<button class="btn primary" onclick="openNewTask()">＋ Add task</button>':''}${weekNavHtml()}</div>`;
+  document.getElementById('main').innerHTML=pageHead('Tasks','Plan, track and manage engineering work across all products.',actions)+filters+`<div id="taskResults"></div>`;
   syncSearchInputs(state.filters.search);renderTaskResults();
 }
 function renderTaskResults(){const el=document.getElementById('taskResults');if(!el)return;el.innerHTML=state.taskMode==='board'?renderBoardHtml():renderTableHtml();}
@@ -77,8 +78,22 @@ function renderBoardHtml(){const tasks=filteredTasks(),plan=plannedMap();return 
 function setMobileStatus(s){state.mobileStatus=s;renderTasks()}
 function taskCard(t,w,mobile){const pending=!!t.pendingSync&&!t.sourceBacked;return `<article class="task-card" ${canEdit()&&!mobile&&!pending?`draggable="true" ondragstart="boardDragStart(event,'${esc(t.taskId)}')" ondragend="boardDragEnd(event)"`:''} onclick="openTask('${esc(t.taskId)}')"><div class="task-id">${esc(t.taskId)}${pending?' <span class="badge orange">Syncing</span>':''}</div><div class="task-title">${esc(t.title||'(Untitled task)')}</div><div class="task-meta">${productBadge(t.product)}${t.workstream?`<span class="badge gray">${esc(t.workstream)}</span>`:''}${mobile?statusBadge(t.status):''}</div><div class="task-foot"><div class="owner"><span class="avatar">${initials(t.owner)}</span>${esc(t.owner||'Unassigned')}</div><div style="display:flex;gap:6px;align-items:center"><div class="prio">${priorityBadge(t.normalizedPriority||t.priority)}</div></div></div><div class="plan-chip">${isTaskDone(t)?'<span class="badge green">Done</span>':w?commitmentBadge(w.commitmentLevel):canEdit()?(pending?'<span class="badge gray">Syncing…</span>':`<button class="btn sm" onclick="event.stopPropagation();openPlanTask('${esc(t.taskId)}')">Plan</button>`):''}</div></article>`;}
 let draggingTaskId='';function boardDragStart(e,id){draggingTaskId=id;e.currentTarget.classList.add('dragging');e.dataTransfer.effectAllowed='move'}function boardDragEnd(e){e.currentTarget.classList.remove('dragging');document.querySelectorAll('.column').forEach(x=>x.classList.remove('drag-over'))}function boardDragOver(e){if(!canEdit())return;e.preventDefault();e.currentTarget.classList.add('drag-over')}function boardDragLeave(e){e.currentTarget.classList.remove('drag-over')}async function boardDrop(e,status){e.preventDefault();e.currentTarget.classList.remove('drag-over');if(!draggingTaskId)return;const t=state.tasks.find(x=>x.taskId===draggingTaskId);draggingTaskId='';if(!t||groupStatus(t)===status)return;const old=t.status;t.status=status;t.statusGroup=status;renderTasks();try{await server('updateTaskById',t.taskId,'status',status);showToast(`${t.taskId} moved to ${status}`)}catch(err){t.status=old;t.statusGroup=groupStatus({status:old});renderTasks();showError(err)}}
+function sortTasksForTable(tasks){
+  const statusRank={Backlog:0,Todo:1,'In Progress':2,QA:3,Blocked:4,Done:5};
+  const priorityRank={P0:0,P1:1,P2:2,P3:3};
+  return (tasks||[]).slice().sort((a,b)=>{
+    const status=(statusRank[groupStatus(a)]??99)-(statusRank[groupStatus(b)]??99);
+    if(status)return status;
+    const priority=(priorityRank[a.normalizedPriority||a.priority]??9)-(priorityRank[b.normalizedPriority||b.priority]??9);
+    if(priority)return priority;
+    const dueA=String(a.dueDate||'9999-12-31'),dueB=String(b.dueDate||'9999-12-31');
+    if(dueA!==dueB)return dueA.localeCompare(dueB);
+    return String(a.title||'').localeCompare(String(b.title||''));
+  });
+}
+
 function renderTableHtml(){
-  const all=filteredTasks();
+  const all=sortTasksForTable(filteredTasks());
   const owners=uniq(state.tasks.map(t=>t.owner));
   const plan=plannedMap();
   const pages=Math.max(1,Math.ceil(all.length/state.taskPageSize));
@@ -100,10 +115,14 @@ function renderTableHtml(){
           </tr>
         </thead>
         <tbody>
-          ${tasks.map(t=>{
+          ${tasks.map((t,index)=>{
             const w=plan.get(String(t.taskId).toLowerCase());
             const pending=!!t.pendingSync&&!t.sourceBacked;
-            return `<tr>
+            const status=groupStatus(t);
+            const groupHeader=index===0||status!==groupStatus(tasks[index-1])
+              ?`<tr class="task-status-row"><td colspan="9">${esc(status==='QA'?'QA / Review':status)} <span>${tasks.filter(item=>groupStatus(item)===status).length} tasks</span></td></tr>`
+              :'';
+            return `${groupHeader}<tr>
               <td><span class="badge blue">${esc(t.taskId)}</span>${pending?' <span class="badge orange">Syncing</span>':''}</td>
               <td><button class="task-link" onclick="openTask('${esc(t.taskId)}')">${esc(t.title)}</button><div class="subline">${esc(t.workstream)} · ${esc(t.sourceSheet)}</div></td>
               <td>${productBadge(t.product)}</td>

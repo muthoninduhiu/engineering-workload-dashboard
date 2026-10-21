@@ -1143,23 +1143,40 @@ function getSourceTaskCacheVersion_() {
 }
 
 function sourceTaskCacheKey_(suffix, version) {
-  return 'EW_SOURCE_TASKS_' + (version || getSourceTaskCacheVersion_()) + '_' + suffix;
+  // V2 deliberately discards the earlier cache format, which could contain
+  // a snapshot assembled before complete-source verification existed.
+  return 'EW_SOURCE_TASKS_V2_' + (version || getSourceTaskCacheVersion_()) + '_' + suffix;
 }
 
 function clearSourceTaskCache_() {
   const properties = PropertiesService.getScriptProperties();
   const current = Number(getSourceTaskCacheVersion_()) || 1;
+  properties.setProperty(
+    CONFIG.SOURCE_TASK_CACHE_PREVIOUS_VERSION_PROPERTY_KEY,
+    String(current)
+  );
   properties.setProperty(CONFIG.SOURCE_TASK_CACHE_VERSION_PROPERTY_KEY, String(current + 1));
 }
 
-function readCachedSourceTasks_() {
+function getPreviousSourceTaskCacheVersion_() {
+  return clean_(
+    PropertiesService.getScriptProperties().getProperty(
+      CONFIG.SOURCE_TASK_CACHE_PREVIOUS_VERSION_PROPERTY_KEY
+    )
+  );
+}
+
+function readCachedSourceTasks_(requestedVersion) {
   const cache = CacheService.getScriptCache();
-  const version = getSourceTaskCacheVersion_();
+  const version = requestedVersion || getSourceTaskCacheVersion_();
   const manifest = cache.get(sourceTaskCacheKey_('manifest', version));
   if (!manifest) return null;
 
   try {
-    const count = Number(JSON.parse(manifest).chunks);
+    const parsedManifest = JSON.parse(manifest);
+    // Ignore cache entries created before complete-source verification.
+    if (parsedManifest.complete !== true) return null;
+    const count = Number(parsedManifest.chunks);
     if (!Number.isInteger(count) || count < 1 || count > 20) return null;
     const parts = [];
     for (let i = 0; i < count; i += 1) {
@@ -1189,7 +1206,7 @@ function cacheSourceTasks_(tasks) {
     chunks.forEach(function(chunk, index) {
       cache.put(sourceTaskCacheKey_('chunk_' + index, version), chunk, CONFIG.SOURCE_TASK_CACHE_SECONDS);
     });
-    cache.put(sourceTaskCacheKey_('manifest', version), JSON.stringify({chunks: chunks.length}), CONFIG.SOURCE_TASK_CACHE_SECONDS);
+    cache.put(sourceTaskCacheKey_('manifest', version), JSON.stringify({chunks: chunks.length, complete: true}), CONFIG.SOURCE_TASK_CACHE_SECONDS);
   } catch (error) {
     console.warn('Could not cache source tasks.', error);
   }
@@ -1199,9 +1216,15 @@ function getConfiguredSourceTasks_() {
   const cached = readCachedSourceTasks_();
   if (cached) return cached;
 
+  const previousVersion = getPreviousSourceTaskCacheVersion_();
+  const lastComplete = previousVersion
+    ? readCachedSourceTasks_(previousVersion)
+    : null;
+
   const tasks = [];
   const seenTaskIds = {};
   const seenSourceSheets = {};
+  const failures = [];
 
   Object.keys(TASK_ROUTING).forEach(function(product) {
     (TASK_ROUTING[product] || []).forEach(function(routeConfig) {
@@ -1220,10 +1243,21 @@ function getConfiguredSourceTasks_() {
       seenSourceSheets[sourceKey] = true;
 
       const routeTaskIds = {};
-      readTasksFromSourceRoute_(
-        route,
-        false
-      ).forEach(function(task) {
+      let routeTasks = [];
+
+      try {
+        routeTasks = readTasksFromSourceRoute_(route, false);
+      } catch (error) {
+        // Never treat partial source data as a successful dashboard snapshot.
+        console.warn(
+          'Could not load ' + route.product + ' / ' + route.sourceSheet + '.',
+          error
+        );
+        failures.push(route.product + ' / ' + route.sourceSheet);
+        return;
+      }
+
+      routeTasks.forEach(function(task) {
         const taskKey =
           canonicalProduct_(task.product) +
           '::' +
@@ -1238,6 +1272,18 @@ function getConfiguredSourceTasks_() {
       });
     });
   });
+
+  if (failures.length) {
+    if (lastComplete) {
+      console.warn('Using the last complete source-task cache after a source load failure.');
+      return lastComplete;
+    }
+
+    throw new Error(
+      'Could not load all source workbooks (' + failures.join(', ') +
+      '). Please try again shortly; no partial dashboard data was applied.'
+    );
+  }
 
   cacheSourceTasks_(tasks);
   return tasks;
