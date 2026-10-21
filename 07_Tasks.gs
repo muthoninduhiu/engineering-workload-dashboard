@@ -568,6 +568,89 @@ function updateSourceTaskFieldById_(
   return updated;
 }
 
+// Resolves a task source exactly once, then verifies every requested column
+// before changing anything. This prevents a drawer save from succeeding for
+// early fields and failing halfway through on a later field.
+function updateSourceTaskFieldsById_(product, sourceSheetName, taskId, fields) {
+  if (!product || !sourceSheetName || !fields || !Object.keys(fields).length) {
+    return false;
+  }
+
+  let route;
+  try {
+    route = resolveRoute_(product, '', sourceSheetName);
+  } catch (error) {
+    throw new Error('Could not resolve the configured source for ' + taskId + '.');
+  }
+
+  const sheet = getTargetSheet_(route);
+  const sourceRow = findSourceTaskRow_(sheet, taskId);
+  if (sourceRow === -1) {
+    throw new Error(
+      'Could not find ' + taskId + ' in its configured source sheet "' +
+      sourceSheetName + '". Refresh the workspace and verify the task ID exists there.'
+    );
+  }
+
+  const structure = getSourceSheetMap_(sheet);
+  const aliasByField = {
+    owner: structure.aliases.ownerAliases,
+    priority: structure.aliases.priorityAliases,
+    status: structure.aliases.statusAliases,
+    title: structure.aliases.titleAliases,
+    dependency: structure.aliases.dependencyAliases,
+    dueDate: structure.aliases.dueDateAliases,
+    points: structure.aliases.pointsAliases
+  };
+  const writes = [];
+
+  Object.keys(fields).forEach(function(field) {
+    const aliases = aliasByField[field];
+    if (!aliases) throw new Error('Unsupported task field: ' + field);
+    const columns = aliases
+      .map(function(alias) { return structure.map[normalizeHeaderKey_(alias)]; })
+      .filter(function(column) { return column !== undefined; });
+    if (!columns.length) {
+      throw new Error(
+        'The configured source sheet "' + sourceSheetName +
+        '" has no column for ' + field + '.'
+      );
+    }
+    columns.forEach(function(column) {
+      writes.push({ column: column + 1, value: fields[field] });
+    });
+  });
+
+  writes.forEach(function(write) {
+    sheet.getRange(sourceRow, write.column).setValue(write.value);
+  });
+  SpreadsheetApp.flush();
+  patchCachedSourceTask_(taskId, fields);
+  return true;
+}
+
+// Keep an already-complete catalogue hot after a normal task edit. A cache
+// miss remains safe: the next read rebuilds the complete snapshot as before.
+function patchCachedSourceTask_(taskId, fields) {
+  const cached = readCachedSourceTasks_();
+  if (!cached) return;
+  const key = clean_(taskId).toLowerCase();
+  let changed = false;
+  const updated = cached.map(function(task) {
+    if (clean_(task.taskId).toLowerCase() !== key) return task;
+    changed = true;
+    const next = Object.assign({}, task, fields);
+    if (Object.prototype.hasOwnProperty.call(fields, 'owner')) {
+      next.owner = normalizeOwner_(fields.owner);
+    }
+    if (Object.prototype.hasOwnProperty.call(fields, 'priority')) {
+      next.normalizedPriority = normalizePriority_(fields.priority);
+    }
+    return next;
+  });
+  if (changed) cacheSourceTasks_(updated);
+}
+
 /* ============================================================
    WEEKLY SHEET
 ============================================================ */
@@ -1314,21 +1397,67 @@ function hydrateTaskFromSource_(task, includeDetails) {
   const hydrated=Object.assign({},task,sourceTask); if(Number(task.rowIndex))hydrated.rowIndex=task.rowIndex;
   hydrated.sourceBacked=true; hydrated.pendingSync=false; return hydrated;
 }
+function normalizeTaskUpdateFields_(fields) {
+  const allowed = ['title', 'owner', 'priority', 'status', 'dependency', 'dueDate'];
+  const normalized = {};
+  Object.keys(fields || {}).forEach(function(field) {
+    if (allowed.indexOf(field) === -1) {
+      throw new Error('Unsupported task field: ' + field);
+    }
+    let value = fields[field];
+    if (field === 'title') {
+      value = clean_(value);
+      if (!value) throw new Error('Task title is required.');
+    } else if (field === 'owner') {
+      value = normalizeOwner_(value);
+    } else if (field === 'priority') {
+      value = canonicalPriorityInput_(value);
+    } else if (field === 'status') {
+      value = canonicalStatusInput_(value);
+    } else if (field === 'dueDate') {
+      value = validateIsoDateInput_(value, 'Due date');
+    } else if (field === 'dependency') {
+      value = clean_(value);
+    }
+    normalized[field] = value;
+  });
+  if (!Object.keys(normalized).length) throw new Error('No task changes were supplied.');
+  return normalized;
+}
+
+function updateTaskFieldsById(taskId, fields) {
+  const access = requireEditor_();
+  const task = getTaskById(taskId);
+  if (!task) throw new Error('Task was not found.');
+  requireProductAccess_(access, task.product, true);
+
+  const updates = normalizeTaskUpdateFields_(fields);
+  updateSourceTaskFieldsById_(task.product, task.sourceSheet, task.taskId, updates);
+
+  const activities = Object.keys(updates).map(function(field) {
+    return {
+      action: 'Updated task', entityType: 'Task', taskId: task.taskId,
+      taskName: Object.prototype.hasOwnProperty.call(updates, 'title') ? updates.title : task.title,
+      product: task.product, sourceSheet: task.sourceSheet, field: field,
+      oldValue: task[field], newValue: updates[field]
+    };
+  });
+  logActivities_(activities, access);
+
+  const updatedTask = Object.assign({}, task, updates, {
+    normalizedPriority: Object.prototype.hasOwnProperty.call(updates, 'priority')
+      ? normalizePriority_(updates.priority)
+      : task.normalizedPriority
+  });
+  return {success: true, task: updatedTask, updatedSource: true, updatedFields: Object.keys(updates)};
+}
+
 function updateTaskById(taskId, field, value) {
-  const access=requireEditor_(); const task=getTaskById(taskId); if(!task)throw new Error('Task was not found.'); requireProductAccess_(access,task.product,true);
-  const allowed=['title','owner','priority','status','dependency','dueDate']; if(allowed.indexOf(field)===-1)throw new Error('Unsupported task field: '+field);
-  if(field==='title'){value=clean_(value);if(!value)throw new Error('Task title is required.');}
-  else if(field==='owner')value=normalizeOwner_(value);
-  else if(field==='priority')value=canonicalPriorityInput_(value);
-  else if(field==='status')value=canonicalStatusInput_(value);
-  else if(field==='dueDate')value=validateIsoDateInput_(value,'Due date');
-  else if(field==='dependency')value=clean_(value);
-  const oldValue=task[field];
-  const updatedSource=updateSourceTaskFieldById_(task.product,task.sourceSheet,task.taskId,field,value);
-  if(!updatedSource)throw new Error('Could not update '+task.taskId+' in its source sheet.');
-  logActivities_([{action:'Updated task',entityType:'Task',taskId:task.taskId,taskName:task.title,product:task.product,sourceSheet:task.sourceSheet,field:field,oldValue:oldValue,newValue:value}],access);
-  SpreadsheetApp.flush();
-  return {success:true,task:getTaskById(task.taskId),updatedSource:true};
+  return updateTaskFieldsById(taskId, (function() {
+    const fields = {};
+    fields[field] = value;
+    return fields;
+  })());
 }
 function addTaskIdToWeek(taskId, commitmentLevel, selectedWeekStart, estimatedHours) {
   const access=requireEditor_(); const task=getTaskById(taskId); if(!task)throw new Error('Task was not found.'); requireProductAccess_(access,task.product,true);
@@ -1571,7 +1700,13 @@ function getTaskById(taskId) {
   const access = requireViewer_();
   if (!clean_(taskId)) return null;
   const ss = getDashboardSpreadsheet_();
-  let task = findSourceTaskById_(taskId, '', '', true);
+  const key = clean_(taskId).toLowerCase();
+  // The verified catalogue already carries the configured route. Prefer it to
+  // avoid scanning every workbook again for each drawer open or save.
+  let task = getSourceTasks_().find(function(item) {
+    return clean_(item.taskId).toLowerCase() === key;
+  }) || null;
+  if (!task) task = findSourceTaskById_(taskId, '', '', true);
   if (task) removePendingCreatedTask_(task.taskId);
   if (!task) task = findPendingTask_(taskId);
   if (!task) {

@@ -27,6 +27,7 @@ function apiCall(request) {
       applySourceDataValidation:applySourceDataValidation,
       updateMasterTaskField:updateMasterTaskField,
       updateTaskById:updateTaskById,
+      updateTaskFieldsById:updateTaskFieldsById,
       addTaskIdToWeek:addTaskIdToWeek,
       addTaskToWeek:addTaskToWeek,
       addTasksToWeek:addTasksToWeek,
